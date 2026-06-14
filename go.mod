@@ -5,7 +5,7 @@ go 1.25
 require (
 	github.com/apernet/hysteria/core/v2 v2.9.2
 	github.com/apernet/hysteria/extras/v2 v2.9.2
-	github.com/beevik/ntp v1.2.0
+	github.com/beevik/ntp v1.5.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-acme/lego/v4 v4.17.4
 	github.com/go-resty/resty/v2 v2.13.1
