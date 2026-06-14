@@ -1,0 +1,111 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/release.yml"
+  pull_request:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/release.yml"
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            asset_name: linux-64
+          - goarch: arm64
+            asset_name: linux-arm64-v8a
+          - goarch: s390x
+            asset_name: linux-s390x
+
+    runs-on: ubuntu-latest
+    env:
+      GOOS: linux
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: 0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.11"
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Resolve version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "VERSION=${{ github.event.release.tag_name }}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build
+        shell: bash
+        run: |
+          mkdir -p build_assets
+          go build -v -o build_assets/V2bX \
+            -tags "sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" \
+            -trimpath \
+            -ldflags "-X github.com/InazumaV/V2bX/cmd.version=${VERSION} -s -w -buildid="
+
+      - name: Prepare package
+        shell: bash
+        run: |
+          cp README.md LICENSE build_assets/
+          cp example/*.json build_assets/
+          curl -fL --retry 3 \
+            https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat \
+            -o build_assets/geoip.dat
+          curl -fL --retry 3 \
+            https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat \
+            -o build_assets/geosite.dat
+
+      - name: Create archive
+        shell: bash
+        run: |
+          pushd build_assets
+          zip -9vr "../V2bX-${{ matrix.asset_name }}.zip" .
+          popd
+          FILE="V2bX-${{ matrix.asset_name }}.zip"
+          for METHOD in md5 sha1 sha256 sha512; do
+            openssl dgst "-${METHOD}" "$FILE" | sed 's/([^)]*)//g' >> "${FILE}.dgst"
+          done
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: V2bX-${{ matrix.asset_name }}
+          path: |
+            V2bX-${{ matrix.asset_name }}.zip
+            V2bX-${{ matrix.asset_name }}.zip.dgst
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            V2bX-${{ matrix.asset_name }}.zip
+            V2bX-${{ matrix.asset_name }}.zip.dgst
