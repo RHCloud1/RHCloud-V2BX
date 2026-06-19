@@ -14,13 +14,13 @@
 ## 一键安装
 
 ```bash
-wget -N https://raw.githubusercontent.com/RHCloud1/RHCloud-V2BX/master/script/install.sh && bash install.sh
+wget -O install.sh "https://raw.githubusercontent.com/RHCloud1/RHCloud-V2BX/master/script/install.sh?$(date +%s)" && bash install.sh
 ```
 
 安装指定版本：
 
 ```bash
-wget -N https://raw.githubusercontent.com/RHCloud1/RHCloud-V2BX/master/script/install.sh && bash install.sh v0.0.0-anytls.20260611
+wget -O install.sh "https://raw.githubusercontent.com/RHCloud1/RHCloud-V2BX/master/script/install.sh?$(date +%s)" && bash install.sh v0.0.0-anytls.20260611
 ```
 
 安装完成后运行：

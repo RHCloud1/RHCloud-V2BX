@@ -140,8 +140,9 @@ install_V2bX() {
     chmod +x V2bX
     mkdir /etc/V2bX/ -p
     rm /etc/systemd/system/V2bX.service -f
-    file="https://raw.githubusercontent.com/RHCloud1/RHCloud-V2BX/master/script/V2bX.service"
-    wget -q -N --no-check-certificate -O /etc/systemd/system/V2bX.service ${file}
+    cache_bust=$(date +%s)
+    file="https://raw.githubusercontent.com/RHCloud1/RHCloud-V2BX/master/script/V2bX.service?${cache_bust}"
+    wget -q --no-check-certificate -O /etc/systemd/system/V2bX.service "$file"
     #cp -f V2bX.service /etc/systemd/system/
     systemctl daemon-reload
     systemctl stop V2bX
@@ -180,7 +181,7 @@ install_V2bX() {
     if [[ ! -f /etc/V2bX/custom_inbound.json ]]; then
         cp custom_inbound.json /etc/V2bX/
     fi
-    curl -o /usr/bin/V2bX -Ls https://raw.githubusercontent.com/RHCloud1/RHCloud-V2BX/master/script/V2bX.sh
+    curl -o /usr/bin/V2bX -Ls "https://raw.githubusercontent.com/RHCloud1/RHCloud-V2BX/master/script/V2bX.sh?${cache_bust}"
     chmod +x /usr/bin/V2bX
     if [ ! -L /usr/bin/v2bx ]; then
         ln -s /usr/bin/V2bX /usr/bin/v2bx
@@ -211,7 +212,7 @@ install_V2bX() {
     if [[ $first_install == true ]]; then
         read -rp "检测到你为第一次安装V2bX,是否自动直接生成配置文件？(y/n): " if_generate
         if [[ $if_generate == [Yy] ]]; then
-            curl -o ./initconfig.sh -Ls https://raw.githubusercontent.com/RHCloud1/RHCloud-V2BX/master/script/initconfig.sh
+            curl -o ./initconfig.sh -Ls "https://raw.githubusercontent.com/RHCloud1/RHCloud-V2BX/master/script/initconfig.sh?${cache_bust}"
             source initconfig.sh
             rm initconfig.sh -f
             generate_config_file
