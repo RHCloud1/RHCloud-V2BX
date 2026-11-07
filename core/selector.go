@@ -18,6 +18,14 @@ type Selector struct {
 
 func NewSelector(c []conf.CoreConfig) (Core, error) {
 	cs := make(map[string]Core, len(c))
+	success := false
+	defer func() {
+		if !success {
+			for _, core := range cs {
+				_ = core.Close()
+			}
+		}
+	}()
 	for _, t := range c {
 		f, ok := cores[strings.ToLower(t.Type)]
 		if !ok {
@@ -33,6 +41,7 @@ func NewSelector(c []conf.CoreConfig) (Core, error) {
 			cs[t.Name] = core1
 		}
 	}
+	success = true
 	return &Selector{
 		cores: cs,
 	}, nil

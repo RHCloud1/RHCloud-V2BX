@@ -6,7 +6,6 @@ import (
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/common/task"
 	vCore "github.com/InazumaV/V2bX/core"
-	"github.com/InazumaV/V2bX/limiter"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -50,6 +49,8 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 }
 
 func (c *Controller) nodeInfoMonitor() (err error) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
 	// get node info
 	newN, err := c.apiClient.GetNodeInfo()
 	if err != nil {
@@ -74,104 +75,35 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		return err
 	}
 	if newN != nil {
-		c.info = newN
-		// nodeInfo changed
-		if newU != nil {
-			c.userList = newU
-		}
-		c.traffic = make(map[string]int64)
-		// Remove old node
-		log.WithField("tag", c.tag).Info("Node changed, reload")
-		err = c.server.DelNode(c.tag)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"tag": c.tag,
-				"err": err,
-			}).Error("Delete node failed")
+		if err := c.replacePanelNode(newN, newU, newA); err != nil {
+			log.WithField("tag", c.tag).WithError(err).Error("Node reload failed")
 			return nil
 		}
-
-		// Update limiter
-		if len(c.Options.Name) == 0 {
-			c.tag = c.buildNodeTag(newN)
-			// Remove Old limiter
-			limiter.DeleteLimiter(c.tag)
-			// Add new Limiter
-			l := limiter.AddLimiter(c.tag, &c.LimitConfig, c.userList, newA)
-			c.limiter = l
-		}
-		// Update rule
-		err = c.limiter.UpdateRule(&newN.Rules)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"tag": c.tag,
-				"err": err,
-			}).Error("Update Rule failed")
-			return nil
-		}
-
-		// check cert
-		if newN.Security == panel.Tls {
-			err = c.requestCert()
-			if err != nil {
-				log.WithFields(log.Fields{
-					"tag": c.tag,
-					"err": err,
-				}).Error("Request cert failed")
-				return nil
-			}
-		}
-		// add new node
-		err = c.server.AddNode(c.tag, newN, c.Options)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"tag": c.tag,
-				"err": err,
-			}).Error("Add node failed")
-			return nil
-		}
-		_, err = c.server.AddUsers(&vCore.AddUsersParams{
-			Tag:      c.tag,
-			Users:    c.userList,
-			NodeInfo: newN,
-		})
-		if err != nil {
-			log.WithFields(log.Fields{
-				"tag": c.tag,
-				"err": err,
-			}).Error("Add users failed")
-			return nil
-		}
-		// Check interval
-		if c.nodeInfoMonitorPeriodic.Interval != newN.PullInterval &&
-			newN.PullInterval != 0 {
-			c.nodeInfoMonitorPeriodic.Interval = newN.PullInterval
-			c.nodeInfoMonitorPeriodic.Close()
-			_ = c.nodeInfoMonitorPeriodic.Start(false)
-		}
-		if c.userReportPeriodic.Interval != newN.PushInterval &&
-			newN.PushInterval != 0 {
-			c.userReportPeriodic.Interval = newN.PullInterval
-			c.userReportPeriodic.Close()
-			_ = c.userReportPeriodic.Start(false)
-		}
-		log.WithField("tag", c.tag).Infof("Added %d new users", len(c.userList))
-		// exit
+		c.nodeInfoMonitorPeriodic.SetInterval(newN.PullInterval)
+		c.userReportPeriodic.SetInterval(newN.PushInterval)
 		return nil
 	}
 	// update alive list
 	if newA != nil {
-		c.limiter.AliveList = newA
+		c.limiter.UpdateAlive(newA)
+		c.aliveMap = newA
 	}
 	// node no changed, check users
-	if len(newU) == 0 {
+	if newU == nil {
 		return nil
 	}
 	deleted, added := compareUserList(c.userList, newU)
-	if len(deleted) > 0 {
+	// Limit-only changes go to the limiter below; the core only sees real
+	// additions and removals so it does not rebuild the inbound needlessly.
+	coreDeleted, coreAdded := coreUserChanges(deleted, added)
+	if len(coreDeleted) > 0 {
+		_ = c.reportUserTraffic()
+	}
+	if len(coreDeleted) > 0 {
 		// have deleted users
-		err = c.server.DelUsers(deleted, c.tag)
+		err = c.server.DelUsers(coreDeleted, c.tag)
 		if err != nil {
+			c.apiClient.InvalidateCache()
 			log.WithFields(log.Fields{
 				"tag": c.tag,
 				"err": err,
@@ -179,14 +111,15 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			return nil
 		}
 	}
-	if len(added) > 0 {
+	if len(coreAdded) > 0 {
 		// have added users
 		_, err = c.server.AddUsers(&vCore.AddUsersParams{
 			Tag:      c.tag,
 			NodeInfo: c.info,
-			Users:    added,
+			Users:    coreAdded,
 		})
 		if err != nil {
+			c.apiClient.InvalidateCache()
 			log.WithFields(log.Fields{
 				"tag": c.tag,
 				"err": err,
@@ -206,8 +139,8 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		}
 		// clear traffic record
 		if c.LimitConfig.EnableDynamicSpeedLimit {
-			for i := range deleted {
-				delete(c.traffic, deleted[i].Uuid)
+			for i := range coreDeleted {
+				delete(c.traffic, coreDeleted[i].Uuid)
 			}
 		}
 	}
@@ -220,6 +153,8 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 }
 
 func (c *Controller) SpeedChecker() error {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
 	for u, t := range c.traffic {
 		if t >= c.LimitConfig.DynamicSpeedLimitConfig.Traffic {
 			err := c.limiter.UpdateDynamicSpeedLimit(c.tag, u,

@@ -70,3 +70,13 @@ func TestGetAnyTLSInboundOptionsRequiresTLS(t *testing.T) {
 		t.Fatal("expected AnyTLS without a certificate to fail")
 	}
 }
+
+func TestResidentialOriginalConfig(t *testing.T) {
+	c := conf.NewSingConfig()
+	c.OriginalPath = "../../example/sing_residential.json"
+	b, err := New(&conf.CoreConfig{Type: "sing", SingConfig: c})
+	if err != nil {
+		t.Fatalf("residential config is not compatible with embedded sing-box: %v", err)
+	}
+	defer b.Close()
+}

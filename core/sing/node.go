@@ -12,9 +12,13 @@ import (
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/conf"
 	"github.com/goccy/go-json"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/auth"
 	F "github.com/sagernet/sing/common/format"
 	"github.com/sagernet/sing/common/json/badoption"
+	N "github.com/sagernet/sing/common/network"
 )
 
 type HttpNetworkConfig struct {
@@ -378,11 +382,39 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options, users 
 				TLS: &tls,
 			},
 		}
+	case "naive":
+		if !tls.Enabled {
+			return option.Inbound{}, fmt.Errorf("naive requires TLS certificate configuration")
+		}
+		// HTTP/2 over TCP by default; HTTP/3 also binds UDP on the same port.
+		network := option.NetworkList(N.NetworkTCP)
+		if c.SingOptions.NaiveQUIC {
+			network = option.NetworkList(N.NetworkTCP + "\n" + N.NetworkUDP)
+		}
+		in.Type = "naive"
+		in.Options = &option.NaiveInboundOptions{
+			ListenOptions: listen,
+			Users:         buildNaiveUsers(users),
+			Network:       network,
+			InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
+				TLS: &tls,
+			},
+		}
+	default:
+		return option.Inbound{}, fmt.Errorf("unsupported node type %q for sing core", info.Type)
 	}
 	return in, nil
 }
 
 func (b *Sing) AddNode(tag string, info *panel.NodeInfo, config *conf.Options) error {
+	b.nodesMu.Lock()
+	defer b.nodesMu.Unlock()
+	if _, found := b.nodes[tag]; found {
+		return fmt.Errorf("duplicate node tag %q", tag)
+	}
+	if _, found := b.box.Inbound().Get(tag); found {
+		return fmt.Errorf("node tag %q conflicts with OriginalPath inbound", tag)
+	}
 	b.nodes[tag] = &nodeState{
 		info:   info,
 		config: config,
@@ -395,33 +427,43 @@ func (b *Sing) createInbound(tag string, info *panel.NodeInfo, config *conf.Opti
 	if err != nil {
 		return err
 	}
-	in := b.box.Inbound()
-	err = in.Create(
-		b.ctx,
+	logger := b.logFactory.NewLogger(F.ToString("inbound/", c.Type, "[", tag, "]"))
+	scope := adapter.NewScope(b.ctx, logger)
+	in, err := include.InboundRegistry().Create(
+		scope.Context(),
 		b.box.Router(),
-		b.logFactory.NewLogger(F.ToString("inbound/", c.Type, "[", tag, "]")),
+		logger,
 		tag,
 		c.Type,
 		c.Options,
 	)
 
 	if err != nil {
-		return fmt.Errorf("add inbound error: %s", err)
+		scope.Close()
+		return fmt.Errorf("add inbound error: %w", err)
 	}
+	// Since sing-box 1.14, the manager only creates static inbounds. Own each
+	// dynamic listener's lifecycle scope so updates and removal release its port.
+	for _, stage := range adapter.ListStartStages {
+		if err := scope.Start(tag, in, stage); err != nil {
+			scope.Close()
+			return fmt.Errorf("start inbound: %w", err)
+		}
+	}
+	b.nodes[tag].inbound, b.nodes[tag].scope = in, scope
 	return nil
 }
 
 func (b *Sing) DelNode(tag string) error {
-	in := b.box.Inbound()
-	if _, found := in.Get(tag); !found {
-		delete(b.nodes, tag)
-		return nil
-	}
-	err := in.Remove(tag)
-	if err != nil {
-		return fmt.Errorf("delete inbound error: %s", err)
+	b.nodesMu.Lock()
+	defer b.nodesMu.Unlock()
+	if state := b.nodes[tag]; state != nil && state.scope != nil {
+		if err := state.scope.Close(); err != nil {
+			return fmt.Errorf("delete inbound: %w", err)
+		}
 	}
 	delete(b.nodes, tag)
+	b.hookServer.counter.Delete(tag)
 	return nil
 }
 
@@ -430,10 +472,11 @@ func (b *Sing) recreateInbound(tag string) error {
 	if !found {
 		return fmt.Errorf("node state not found")
 	}
-	in := b.box.Inbound()
-	if _, found = in.Get(tag); found {
-		if err := in.Remove(tag); err != nil {
-			return fmt.Errorf("delete inbound error: %s", err)
+	if state.scope != nil {
+		err := state.scope.Close()
+		state.scope, state.inbound = nil, nil
+		if err != nil {
+			return fmt.Errorf("close inbound: %w", err)
 		}
 	}
 	return b.createInbound(tag, state.info, state.config, state.users)
@@ -504,6 +547,19 @@ func buildHysteria2Users(users []panel.UserInfo) []option.Hysteria2User {
 	for i := range users {
 		result[i] = option.Hysteria2User{
 			Name:     users[i].Uuid,
+			Password: users[i].Uuid,
+		}
+	}
+	return result
+}
+
+// Xboard's socks/http/naive nodes use the user's UUID as both username and
+// password; the username also keys the traffic counter.
+func buildNaiveUsers(users []panel.UserInfo) []auth.User {
+	result := make([]auth.User, len(users))
+	for i := range users {
+		result[i] = auth.User{
+			Username: users[i].Uuid,
 			Password: users[i].Uuid,
 		}
 	}

@@ -26,8 +26,13 @@ func (c *TrafficCounter) GetCounter(id string) *TrafficStorage {
 	cts, ok := c.counters[id]
 	c.lock.RUnlock()
 	if !ok {
-		cts = &TrafficStorage{}
-		c.counters[id] = cts
+		c.lock.Lock()
+		cts, ok = c.counters[id]
+		if !ok {
+			cts = &TrafficStorage{}
+			c.counters[id] = cts
+		}
+		c.lock.Unlock()
 	}
 	return cts
 }
@@ -59,11 +64,20 @@ func (c *TrafficCounter) Len() int {
 }
 
 func (c *TrafficCounter) Reset(id string) {
-	c.lock.RLock()
 	cts := c.GetCounter(id)
-	c.lock.RUnlock()
 	cts.UpCounter.Store(0)
 	cts.DownCounter.Store(0)
+}
+
+// Take drains each direction atomically, preserving traffic added concurrently.
+func (c *TrafficCounter) Take(id string) (up, down int64) {
+	c.lock.RLock()
+	cts := c.counters[id]
+	c.lock.RUnlock()
+	if cts == nil {
+		return 0, 0
+	}
+	return cts.UpCounter.Swap(0), cts.DownCounter.Swap(0)
 }
 
 func (c *TrafficCounter) Delete(id string) {

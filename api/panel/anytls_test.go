@@ -34,6 +34,16 @@ func TestAnyTlsPaddingSchemeString(t *testing.T) {
 	}
 }
 
+func TestNewAcceptsNaive(t *testing.T) {
+	client, err := New(&conf.ApiConfig{APIHost: "https://panel.example.com", Key: "test-key", NodeType: "Naive", NodeID: 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.NodeType != "naive" {
+		t.Fatalf("node type = %q, want naive", client.NodeType)
+	}
+}
+
 func TestNewAcceptsAnyTLS(t *testing.T) {
 	client, err := New(&conf.ApiConfig{
 		APIHost:  "https://panel.example.com",

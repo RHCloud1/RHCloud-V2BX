@@ -39,6 +39,8 @@ type SingOptions struct {
 	DomainStrategy           option.DomainStrategy  `json:"DomainStrategy"`
 	FallBackConfigs          *FallBackConfigForSing `json:"FallBackConfigs"`
 	Multiplex                *MultiplexConfig       `json:"MultiplexConfig"`
+	// NaiveQUIC also serves Naive over HTTP/3 on the same UDP port.
+	NaiveQUIC bool `json:"NaiveQUIC"`
 }
 
 type SingNtpConfig struct {

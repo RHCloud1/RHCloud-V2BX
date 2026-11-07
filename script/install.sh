@@ -1,225 +1,252 @@
 #!/bin/bash
+set -euo pipefail
 
-red='\033[0;31m'
-green='\033[0;32m'
-yellow='\033[0;33m'
-plain='\033[0m'
+REPO="RHCloud1/RHCloud-V2BX"
+ROOT="${V2BX_ROOT:-}"
+INSTALL_DIR="${ROOT}/usr/local/V2bX"
+CONFIG_DIR="${ROOT}/etc/V2bX"
+SERVICE_FILE="${ROOT}/etc/systemd/system/V2bX.service"
+MENU_FILE="${ROOT}/usr/bin/V2bX"
+BACKUP_ROOT="${ROOT}/usr/local/.v2bx-backups"
+SYSTEMCTL="${V2BX_SYSTEMCTL:-systemctl}"
 
-cur_dir=$(pwd)
+download() {
+    curl --fail --location --retry 3 --connect-timeout 15 --max-time 300 "$1" -o "$2"
+}
 
-# check root
-[[ $EUID -ne 0 ]] && echo -e "${red}错误：${plain} 必须使用root用户运行此脚本！\n" && exit 1
+# Releases before .sha256 was added only ship an openssl .dgst list
+# ("SHA2-256= <hex>"); turn that line into the sha256sum format we verify.
+checksum_from_dgst() {
+    local dgst=$1 out=$2 hash
+    hash=$(awk '$1 == "SHA2-256=" || $1 == "SHA256=" { print $2; exit }' "$dgst")
+    [[ "$hash" =~ ^[[:xdigit:]]{64}$ ]] || { echo "校验文件里没有 SHA256 值" >&2; return 1; }
+    printf '%s  package.zip\n' "$hash" > "$out"
+}
 
-# check os
-if [[ -f /etc/redhat-release ]]; then
-    release="centos"
-elif cat /etc/issue | grep -Eqi "alpine"; then
-    release="alpine"
-    echo -e "${red}脚本暂不支持alpine系统！${plain}\n" && exit 1
-elif cat /etc/issue | grep -Eqi "debian"; then
-    release="debian"
-elif cat /etc/issue | grep -Eqi "ubuntu"; then
-    release="ubuntu"
-elif cat /etc/issue | grep -Eqi "centos|red hat|redhat|rocky|alma|oracle linux"; then
-    release="centos"
-elif cat /proc/version | grep -Eqi "debian"; then
-    release="debian"
-elif cat /proc/version | grep -Eqi "ubuntu"; then
-    release="ubuntu"
-elif cat /proc/version | grep -Eqi "centos|red hat|redhat|rocky|alma|oracle linux"; then
-    release="centos"
-else
-    echo -e "${red}未检测到系统版本，请联系脚本作者！${plain}\n" && exit 1
-fi
+# Prefer <zip>.sha256; fall back to <zip>.dgst for older releases.
+fetch_checksum() {
+    local url=$1 out=$2
+    if download "$url.sha256" "$out" 2>/dev/null; then return 0; fi
+    echo "该版本没有 .sha256，改用 .dgst 中的 SHA256" >&2
+    download "$url.dgst" "$out.dgst" || { echo "该版本没有可用的校验文件，已停止安装" >&2; return 1; }
+    checksum_from_dgst "$out.dgst" "$out"
+}
 
-arch=$(arch)
-
-if [[ $arch == "x86_64" || $arch == "x64" || $arch == "amd64" ]]; then
-    arch="64"
-elif [[ $arch == "aarch64" || $arch == "arm64" ]]; then
-    arch="arm64-v8a"
-elif [[ $arch == "s390x" ]]; then
-    arch="s390x"
-else
-    echo -e "${red}不支持的 CPU 架构: ${arch}${plain}"
-    exit 1
-fi
-
-echo "架构: ${arch}"
-
-if [ "$(getconf WORD_BIT)" != '32' ] && [ "$(getconf LONG_BIT)" != '64' ] ; then
-    echo "本软件不支持 32 位系统(x86)，请使用 64 位系统(x86_64)，如果检测有误，请联系作者"
-    exit 2
-fi
-
-# os version
-if [[ -f /etc/os-release ]]; then
-    os_version=$(awk -F'[= ."]' '/VERSION_ID/{print $3}' /etc/os-release)
-fi
-if [[ -z "$os_version" && -f /etc/lsb-release ]]; then
-    os_version=$(awk -F'[= ."]+' '/DISTRIB_RELEASE/{print $2}' /etc/lsb-release)
-fi
-
-if [[ x"${release}" == x"centos" ]]; then
-    if [[ ${os_version} -le 6 ]]; then
-        echo -e "${red}请使用 CentOS 7 或更高版本的系统！${plain}\n" && exit 1
+# Keep the newest backups (default 3) plus the one manual rollback points to.
+prune_backups() {
+    local keep=${V2BX_KEEP_BACKUPS:-3} last="" dir count=0
+    [[ "$keep" =~ ^[0-9]+$ && "$keep" -ge 1 ]] || keep=3
+    if [[ -f "$(dirname "$INSTALL_DIR")/.v2bx-last-backup" ]]; then
+        read -r last < "$(dirname "$INSTALL_DIR")/.v2bx-last-backup" || last=""
     fi
-    if [[ ${os_version} -eq 7 ]]; then
-        echo -e "${red}注意： CentOS 7 无法使用hysteria1/2协议！${plain}\n"
+    while IFS= read -r dir; do
+        [[ -n "$dir" ]] || continue
+        count=$((count + 1))
+        if (( count > keep )) && [[ "$dir" != "$last" && "$dir" = "$BACKUP_ROOT"/release.* ]]; then
+            rm -rf -- "$dir"
+        fi
+    done < <(ls -1dt -- "$BACKUP_ROOT"/release.* 2>/dev/null || true)
+}
+
+validate_archive() {
+    local archive=$1 checksum=$2 expected actual name
+    read -r expected _ < "$checksum"
+    [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]] || { echo "无效的 SHA256 文件" >&2; return 1; }
+    actual=$(sha256sum "$archive")
+    [[ "${actual%% *}" = "${expected,,}" ]] || { echo "安装包 SHA256 不匹配，未修改现有安装" >&2; return 1; }
+    # Refuse path traversal, symbolic links and archives with unexpected roots.
+    while IFS= read -r name; do
+        [[ "$name" != /* && "$name" != *\\* && "/$name/" != */../* ]] || return 1
+    done < <(unzip -Z1 "$archive")
+    if zipinfo -l "$archive" | grep '^l' >/dev/null; then
+        echo "安装包含符号链接，已拒绝" >&2; return 1
     fi
-elif [[ x"${release}" == x"ubuntu" ]]; then
-    if [[ ${os_version} -lt 16 ]]; then
-        echo -e "${red}请使用 Ubuntu 16 或更高版本的系统！${plain}\n" && exit 1
+    unzip -tq "$archive" >/dev/null
+}
+
+restore_backup() {
+    local backup=$1 was_running=$2
+    backup=$(realpath "$backup") || return 1
+    [[ "$backup" = "$BACKUP_ROOT"/release.* && -d "$backup/program" ]] || {
+        echo "没有可恢复的旧版本" >&2; return 1;
+    }
+    "$SYSTEMCTL" stop V2bX || true
+    if [[ -e "$INSTALL_DIR" ]]; then
+        mv -- "$INSTALL_DIR" "$backup/failed-program" || return 1
     fi
-elif [[ x"${release}" == x"debian" ]]; then
-    if [[ ${os_version} -lt 8 ]]; then
-        echo -e "${red}请使用 Debian 8 或更高版本的系统！${plain}\n" && exit 1
+    mv -- "$backup/program" "$INSTALL_DIR" || return 1
+    for item in service menu; do
+        local target=$SERVICE_FILE
+        [[ "$item" = menu ]] && target=$MENU_FILE
+        if [[ -e "$backup/$item" ]]; then
+            cp -p -- "$backup/$item" "$target" || return 1
+        elif [[ -f "$backup/new-$item" ]]; then
+            rm -f -- "$target" || return 1
+        fi
+    done
+    "$SYSTEMCTL" daemon-reload || return 1
+    if [[ "$was_running" = true ]]; then
+        "$SYSTEMCTL" start V2bX || return 1
+        "$SYSTEMCTL" is-active --quiet V2bX || return 1
     fi
-fi
+    echo "已恢复旧版本，失败版本保留在 $backup/failed-program"
+}
+
+install_archive() (
+    local archive=$1 checksum=$2 stage work backup="" was_running=false
+    local promoted=false committed=false locked=false had_program=false
+    local parent
+    parent=$(dirname "$INSTALL_DIR")
+    mkdir -p -- "$parent" "$BACKUP_ROOT" "$(dirname "$MENU_FILE")" "$(dirname "$SERVICE_FILE")" || return 1
+    mkdir -- "$parent/.v2bx-install.lock" || { echo "已有安装任务运行中" >&2; return 1; }
+    locked=true
+    work=$(mktemp -d "$parent/.v2bx-install.XXXXXX") || { rmdir "$parent/.v2bx-install.lock"; return 1; }
+    cleanup() {
+        local status=$?
+        trap - EXIT
+        if [[ "$promoted" = true && "$committed" = false ]]; then
+            if [[ "$had_program" = true ]]; then
+                restore_backup "$backup" "$was_running" || echo "自动回滚失败，备份位于 $backup" >&2
+            else
+                "$SYSTEMCTL" stop V2bX || true
+                [[ ! -d "$INSTALL_DIR" ]] || mv -- "$INSTALL_DIR" "$backup/failed-program"
+                for item in service menu; do
+                    local target=$SERVICE_FILE
+                    [[ "$item" = menu ]] && target=$MENU_FILE
+                    if [[ -e "$backup/$item" ]]; then cp -p -- "$backup/$item" "$target"
+                    else rm -f -- "$target"; fi
+                done
+                "$SYSTEMCTL" daemon-reload || true
+            fi
+        fi
+        [[ "$work" != "$parent"/.v2bx-install.* ]] || rm -rf -- "$work"
+        [[ "$locked" != true ]] || rmdir -- "$parent/.v2bx-install.lock"
+        exit "$status"
+    }
+    trap cleanup EXIT
+    validate_archive "$archive" "$checksum" || return 1
+    stage="$work/program"
+    mkdir "$stage" || return 1
+    unzip -q "$archive" -d "$stage" || return 1
+    for file in V2bX V2bX.sh initconfig.sh install.sh V2bX.service; do
+        [[ -f "$stage/$file" ]] || {
+            echo "安装包缺少 $file：这是旧格式的 Release（不含管理脚本），本安装器只支持新版 Release，请改装最新版本" >&2
+            return 1
+        }
+    done
+    for file in V2bX.sh initconfig.sh install.sh; do bash -n "$stage/$file" || return 1; done
+    chmod 755 "$stage/V2bX" "$stage/"*.sh || return 1
+    "$stage/V2bX" version >/dev/null || return 1
+    if [[ -f "$CONFIG_DIR/config.json" ]]; then
+        "$stage/V2bX" check -c "$CONFIG_DIR/config.json" || {
+            echo "新版本不接受现有配置，未停止旧服务" >&2; return 1;
+        }
+    fi
+    backup=$(mktemp -d "$BACKUP_ROOT/release.XXXXXX") || return 1
+    if [[ -e "$SERVICE_FILE" ]]; then cp -p -- "$SERVICE_FILE" "$backup/service" || return 1
+    else touch "$backup/new-service" || return 1; fi
+    if [[ -e "$MENU_FILE" ]]; then cp -p -- "$MENU_FILE" "$backup/menu" || return 1
+    else touch "$backup/new-menu" || return 1; fi
+    if "$SYSTEMCTL" is-active --quiet V2bX; then was_running=true; fi
+    if [[ -d "$INSTALL_DIR" ]]; then
+        had_program=true
+        "$SYSTEMCTL" stop V2bX || return 1
+        if ! mv -- "$INSTALL_DIR" "$backup/program"; then
+            [[ "$was_running" != true ]] || "$SYSTEMCTL" start V2bX
+            return 1
+        fi
+    fi
+    promoted=true
+    mv -- "$stage" "$INSTALL_DIR" || return 1
+    install -m 644 "$INSTALL_DIR/V2bX.service" "$SERVICE_FILE" || return 1
+    install -m 755 "$INSTALL_DIR/V2bX.sh" "$MENU_FILE" || return 1
+    mkdir -p -- "$CONFIG_DIR" || return 1
+    for file in geoip.dat geosite.dat dns.json route.json custom_outbound.json custom_inbound.json; do
+        if [[ -f "$INSTALL_DIR/$file" && ! -e "$CONFIG_DIR/$file" ]]; then
+            cp -- "$INSTALL_DIR/$file" "$CONFIG_DIR/$file" || return 1
+        fi
+    done
+    "$SYSTEMCTL" daemon-reload || return 1
+    if [[ "$was_running" = true ]]; then
+        "$SYSTEMCTL" start V2bX || return 1
+        for _ in 1 2 3; do
+            sleep "${V2BX_HEALTH_DELAY:-1}"
+            "$SYSTEMCTL" is-active --quiet V2bX || { echo "新服务启动失败，正在回滚" >&2; return 1; }
+        done
+    fi
+    if [[ ! -e "${ROOT}/usr/bin/v2bx" ]]; then ln -s V2bX "${ROOT}/usr/bin/v2bx"; fi
+    if [[ "$had_program" = true ]]; then printf '%s\n' "$backup" > "$parent/.v2bx-last-backup"; fi
+    committed=true
+    prune_backups || echo "清理旧备份失败，可手动删除 $BACKUP_ROOT 下较早的目录" >&2
+    echo "安装成功。配置和证书已保留。旧版本备份：$backup"
+)
 
 install_base() {
-    if [[ x"${release}" == x"centos" ]]; then
-        yum install epel-release -y
-        yum install wget curl unzip tar crontabs socat -y
-        yum install ca-certificates wget -y
-        update-ca-trust force-enable
-    else
-        apt-get update -y
-        apt install wget curl unzip tar cron socat -y
-        apt-get install ca-certificates wget -y
-        update-ca-certificates
+    if command -v apt-get >/dev/null; then
+        apt-get update
+        apt-get install -y curl unzip ca-certificates
+    elif command -v dnf >/dev/null; then
+        dnf install -y curl unzip ca-certificates
+    elif command -v yum >/dev/null; then
+        yum install -y curl unzip ca-certificates
+    else echo "需要 Debian/Ubuntu 或支持 dnf/yum 的 Linux" >&2; return 1
     fi
 }
 
-# 0: running, 1: not running, 2: not installed
-check_status() {
-    if [[ ! -f /etc/systemd/system/V2bX.service ]]; then
-        return 2
+main() {
+    [[ $EUID -eq 0 ]] || { echo "请使用 root 运行" >&2; return 1; }
+    if [[ "${1:-}" = --rollback ]]; then
+        local previous running=false
+        mkdir -- "$(dirname "$INSTALL_DIR")/.v2bx-install.lock" || { echo "已有安装或回滚任务运行中" >&2; return 1; }
+        trap 'rmdir -- "$(dirname "$INSTALL_DIR")/.v2bx-install.lock"' EXIT
+        read -r previous < "$(dirname "$INSTALL_DIR")/.v2bx-last-backup"
+        "$SYSTEMCTL" is-active --quiet V2bX && running=true
+        restore_backup "$previous" "$running"
+        rmdir -- "$(dirname "$INSTALL_DIR")/.v2bx-install.lock"
+        trap - EXIT
+        return
     fi
-    temp=$(systemctl status V2bX | grep Active | awk '{print $3}' | cut -d "(" -f2 | cut -d ")" -f1)
-    if [[ x"${temp}" == x"running" ]]; then
-        return 0
+    install_base
+    if [[ "${1:-}" = --archive ]]; then
+        [[ $# -eq 2 ]] || { echo "用法: bash install.sh --archive /path/package.zip" >&2; return 1; }
+        local archive checksum
+        archive=$(realpath "$2")
+        checksum="$archive.sha256"
+        if [[ ! -f "$checksum" && -f "$archive.dgst" ]]; then
+            checksum=$(mktemp)
+            checksum_from_dgst "$archive.dgst" "$checksum"
+        fi
+        install_archive "$archive" "$checksum"
     else
-        return 1
+        local version="${1:-}" arch work url
+        case "$(uname -m)" in
+            x86_64|amd64) arch=64 ;;
+            aarch64|arm64) arch=arm64-v8a ;;
+            s390x) arch=s390x ;;
+            *) echo "不支持的架构" >&2; return 1 ;;
+        esac
+        if [[ -z "$version" ]]; then
+            url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")
+            version="${url##*/}"
+        fi
+        [[ "$version" =~ ^[a-zA-Z0-9._+-]+$ ]] || { echo "无效版本号" >&2; return 1; }
+        work=$(mktemp -d)
+        trap 'rm -rf -- "$work"' EXIT
+        url="https://github.com/$REPO/releases/download/$version/V2bX-linux-$arch.zip"
+        download "$url" "$work/package.zip"
+        fetch_checksum "$url" "$work/package.zip.sha256"
+        install_archive "$work/package.zip" "$work/package.zip.sha256"
+        rm -rf -- "$work"
+        trap - EXIT
+    fi
+    if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
+        local answer
+        read -rp "是否现在生成节点配置？(y/n): " answer || answer=n
+        if [[ "$answer" =~ ^[Yy]$ ]]; then
+            "$INSTALL_DIR/V2bX" configure -c "$CONFIG_DIR/config.json"
+            [[ ! -f "$CONFIG_DIR/config.json" ]] || "$SYSTEMCTL" enable --now V2bX
+        else echo "安装完成，运行 V2bX generate 配置节点后再启动。"; fi
     fi
 }
 
-install_V2bX() {
-    if [[ -e /usr/local/V2bX/ ]]; then
-        rm -rf /usr/local/V2bX/
-    fi
-
-    mkdir /usr/local/V2bX/ -p
-    cd /usr/local/V2bX/
-
-    if  [ $# == 0 ] ;then
-        last_version=$(curl -Ls "https://api.github.com/repos/RHCloud1/RHCloud-V2BX/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-        if [[ ! -n "$last_version" ]]; then
-            echo -e "${red}检测 V2bX 版本失败，可能是超出 Github API 限制，请稍后再试，或手动指定 V2bX 版本安装${plain}"
-            exit 1
-        fi
-        echo -e "检测到 V2bX 最新版本：${last_version}，开始安装"
-        wget -q -N --no-check-certificate -O /usr/local/V2bX/V2bX-linux.zip https://github.com/RHCloud1/RHCloud-V2BX/releases/download/${last_version}/V2bX-linux-${arch}.zip
-        if [[ $? -ne 0 ]]; then
-            echo -e "${red}下载 V2bX 失败，请确保你的服务器能够下载 Github 的文件${plain}"
-            exit 1
-        fi
-    else
-        last_version=$1
-        url="https://github.com/RHCloud1/RHCloud-V2BX/releases/download/${last_version}/V2bX-linux-${arch}.zip"
-        echo -e "开始安装 V2bX $1"
-        wget -q -N --no-check-certificate -O /usr/local/V2bX/V2bX-linux.zip ${url}
-        if [[ $? -ne 0 ]]; then
-            echo -e "${red}下载 V2bX $1 失败，请确保此版本存在${plain}"
-            exit 1
-        fi
-    fi
-
-    unzip V2bX-linux.zip
-    rm V2bX-linux.zip -f
-    chmod +x V2bX
-    mkdir /etc/V2bX/ -p
-    rm /etc/systemd/system/V2bX.service -f
-    cache_bust=$(date +%s)
-    file="https://raw.githubusercontent.com/RHCloud1/RHCloud-V2BX/master/script/V2bX.service?${cache_bust}"
-    wget -q --no-check-certificate -O /etc/systemd/system/V2bX.service "$file"
-    #cp -f V2bX.service /etc/systemd/system/
-    systemctl daemon-reload
-    systemctl stop V2bX
-    systemctl enable V2bX
-    echo -e "${green}V2bX ${last_version}${plain} 安装完成，已设置开机自启"
-    cp geoip.dat /etc/V2bX/
-    cp geosite.dat /etc/V2bX/
-
-    if [[ ! -f /etc/V2bX/config.json ]]; then
-        cp config.json /etc/V2bX/
-        echo -e ""
-        echo -e "全新安装，请先参看教程：https://v2bx.v-50.me/，配置必要的内容"
-        first_install=true
-    else
-        systemctl start V2bX
-        sleep 2
-        check_status
-        echo -e ""
-        if [[ $? == 0 ]]; then
-            echo -e "${green}V2bX 重启成功${plain}"
-        else
-            echo -e "${red}V2bX 可能启动失败，请稍后使用 V2bX log 查看日志信息，若无法启动，则可能更改了配置格式，请前往 wiki 查看：https://github.com/V2bX-project/V2bX/wiki${plain}"
-        fi
-        first_install=false
-    fi
-
-    if [[ ! -f /etc/V2bX/dns.json ]]; then
-        cp dns.json /etc/V2bX/
-    fi
-    if [[ ! -f /etc/V2bX/route.json ]]; then
-        cp route.json /etc/V2bX/
-    fi
-    if [[ ! -f /etc/V2bX/custom_outbound.json ]]; then
-        cp custom_outbound.json /etc/V2bX/
-    fi
-    if [[ ! -f /etc/V2bX/custom_inbound.json ]]; then
-        cp custom_inbound.json /etc/V2bX/
-    fi
-    curl -o /usr/bin/V2bX -Ls "https://raw.githubusercontent.com/RHCloud1/RHCloud-V2BX/master/script/V2bX.sh?${cache_bust}"
-    chmod +x /usr/bin/V2bX
-    if [ ! -L /usr/bin/v2bx ]; then
-        ln -s /usr/bin/V2bX /usr/bin/v2bx
-        chmod +x /usr/bin/v2bx
-    fi
-    cd $cur_dir
-    rm -f install.sh
-    echo -e ""
-    echo "V2bX 管理脚本使用方法 (兼容使用V2bX执行，大小写不敏感): "
-    echo "------------------------------------------"
-    echo "V2bX              - 显示管理菜单 (功能更多)"
-    echo "V2bX start        - 启动 V2bX"
-    echo "V2bX stop         - 停止 V2bX"
-    echo "V2bX restart      - 重启 V2bX"
-    echo "V2bX status       - 查看 V2bX 状态"
-    echo "V2bX enable       - 设置 V2bX 开机自启"
-    echo "V2bX disable      - 取消 V2bX 开机自启"
-    echo "V2bX log          - 查看 V2bX 日志"
-    echo "V2bX x25519       - 生成 x25519 密钥"
-    echo "V2bX generate     - 生成 V2bX 配置文件"
-    echo "V2bX update       - 更新 V2bX"
-    echo "V2bX update x.x.x - 更新 V2bX 指定版本"
-    echo "V2bX install      - 安装 V2bX"
-    echo "V2bX uninstall    - 卸载 V2bX"
-    echo "V2bX version      - 查看 V2bX 版本"
-    echo "------------------------------------------"
-    # 首次安装询问是否生成配置文件
-    if [[ $first_install == true ]]; then
-        read -rp "检测到你为第一次安装V2bX,是否自动直接生成配置文件？(y/n): " if_generate
-        if [[ $if_generate == [Yy] ]]; then
-            curl -o ./initconfig.sh -Ls "https://raw.githubusercontent.com/RHCloud1/RHCloud-V2BX/master/script/initconfig.sh?${cache_bust}"
-            source initconfig.sh
-            rm initconfig.sh -f
-            generate_config_file
-        fi
-    fi
-}
-
-echo -e "${green}开始安装${plain}"
-install_base
-install_V2bX $1
+if [[ "${BASH_SOURCE[0]}" = "$0" ]]; then main "$@"; fi

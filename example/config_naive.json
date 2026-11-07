@@ -1,0 +1,33 @@
+{
+  "Log": {
+    "Level": "info"
+  },
+  "Cores": [
+    {
+      "Type": "sing",
+      "Name": "naive-direct",
+      "Log": {
+        "Level": "error"
+      }
+    }
+  ],
+  "Nodes": [
+    {
+      "Core": "sing",
+      "CoreName": "naive-direct",
+      "ApiHost": "https://panel.example.com",
+      "ApiKey": "replace-with-xboard-api-key",
+      "NodeID": 3,
+      "NodeType": "naive",
+      "ListenIP": "0.0.0.0",
+      "NaiveQUIC": false,
+      "CertConfig": {
+        "CertMode": "http",
+        "CertDomain": "naive.example.com",
+        "CertFile": "/etc/V2bX/certs/{domain}/fullchain.cer",
+        "KeyFile": "/etc/V2bX/certs/{domain}/cert.key",
+        "Email": "admin@example.com"
+      }
+    }
+  ]
+}

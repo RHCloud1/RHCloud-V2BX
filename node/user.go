@@ -1,13 +1,21 @@
 package node
 
 import (
-	"strconv"
-
 	"github.com/InazumaV/V2bX/api/panel"
 	log "github.com/sirupsen/logrus"
 )
 
 func (c *Controller) reportUserTrafficTask() (err error) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	return c.reportUserTraffic()
+}
+
+// Caller holds stateMu; pending usage survives a failed panel response.
+func (c *Controller) reportUserTraffic() (err error) {
+	if c.pendingTraffic == nil {
+		c.pendingTraffic = make(map[int]panel.UserTraffic)
+	}
 	// Get User traffic
 	userTraffic := make([]panel.UserTraffic, 0)
 	for i := range c.userList {
@@ -16,11 +24,16 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 			if c.LimitConfig.EnableDynamicSpeedLimit {
 				c.traffic[c.userList[i].Uuid] += up + down
 			}
-			userTraffic = append(userTraffic, panel.UserTraffic{
-				UID:      (c.userList)[i].Id,
-				Upload:   up,
-				Download: down})
+			uid := c.userList[i].Id
+			pending := c.pendingTraffic[uid]
+			pending.UID = uid
+			pending.Upload += up
+			pending.Download += down
+			c.pendingTraffic[uid] = pending
 		}
+	}
+	for _, traffic := range c.pendingTraffic {
+		userTraffic = append(userTraffic, traffic)
 	}
 	if len(userTraffic) > 0 {
 		err = c.apiClient.ReportUserTraffic(userTraffic)
@@ -30,6 +43,7 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 				"err": err,
 			}).Info("Report user traffic failed")
 		} else {
+			clear(c.pendingTraffic)
 			log.WithField("tag", c.tag).Infof("Report %d users traffic", len(userTraffic))
 		}
 	}
@@ -71,18 +85,21 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 }
 
 func compareUserList(old, new []panel.UserInfo) (deleted, added []panel.UserInfo) {
-	oldMap := make(map[string]int)
+	type identity struct {
+		uuid               string
+		id, speed, devices int
+	}
+	key := func(u panel.UserInfo) identity { return identity{u.Uuid, u.Id, u.SpeedLimit, u.DeviceLimit} }
+	oldMap := make(map[identity]int)
 	for i, user := range old {
-		key := user.Uuid + strconv.Itoa(user.SpeedLimit)
-		oldMap[key] = i
+		oldMap[key(user)] = i
 	}
 
 	for _, user := range new {
-		key := user.Uuid + strconv.Itoa(user.SpeedLimit)
-		if _, exists := oldMap[key]; !exists {
+		if _, exists := oldMap[key(user)]; !exists {
 			added = append(added, user)
 		} else {
-			delete(oldMap, key)
+			delete(oldMap, key(user))
 		}
 	}
 
@@ -91,4 +108,34 @@ func compareUserList(old, new []panel.UserInfo) (deleted, added []panel.UserInfo
 	}
 
 	return deleted, added
+}
+
+// coreUserChanges keeps only users whose core identity (UUID + panel ID)
+// really changed. A user that appears in both lists only had its speed or
+// device limit changed; the limiter handles that, so the core does not need
+// to rebuild its inbound and drop every connection on the node.
+func coreUserChanges(deleted, added []panel.UserInfo) (coreDeleted, coreAdded []panel.UserInfo) {
+	type identity struct {
+		uuid string
+		id   int
+	}
+	inDeleted := make(map[identity]bool, len(deleted))
+	for _, u := range deleted {
+		inDeleted[identity{u.Uuid, u.Id}] = true
+	}
+	inAdded := make(map[identity]bool, len(added))
+	for _, u := range added {
+		inAdded[identity{u.Uuid, u.Id}] = true
+	}
+	for _, u := range deleted {
+		if !inAdded[identity{u.Uuid, u.Id}] {
+			coreDeleted = append(coreDeleted, u)
+		}
+	}
+	for _, u := range added {
+		if !inDeleted[identity{u.Uuid, u.Id}] {
+			coreAdded = append(coreAdded, u)
+		}
+	}
+	return coreDeleted, coreAdded
 }

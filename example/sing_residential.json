@@ -1,0 +1,20 @@
+{
+  "outbounds": [
+    {
+      "type": "socks",
+      "tag": "residential",
+      "server": "socks.example.com",
+      "server_port": 10001,
+      "version": "5",
+      "username": "replace-with-provider-username",
+      "password": "replace-with-provider-password",
+      "network": "tcp"
+    }
+  ],
+  "route": {
+    "rules": [
+      { "ip_is_private": true, "action": "reject" }
+    ],
+    "final": "residential"
+  }
+}

@@ -16,10 +16,14 @@ import (
 )
 
 var limitLock sync.RWMutex
-var limiter map[string]*Limiter
+var limiter = make(map[string]*Limiter)
+var initialize sync.Once
 
 func Init() {
-	limiter = map[string]*Limiter{}
+	initialize.Do(startCleanup)
+}
+
+func startCleanup() {
 	c := task.Periodic{
 		Interval: time.Minute * 3,
 		Execute:  ClearOnlineIP,
@@ -33,6 +37,8 @@ func Init() {
 }
 
 type Limiter struct {
+	// Rule checks only read and take RLock; everything else mutates state.
+	mu            sync.RWMutex
 	DomainRules   []*regexp.Regexp
 	ProtocolRules []string
 	SpeedLimit    int
@@ -102,11 +108,16 @@ func DeleteLimiter(tag string) {
 }
 
 func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel.UserInfo) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	for i := range deleted {
 		l.UserLimitInfo.Delete(format.UserTag(tag, deleted[i].Uuid))
+		l.SpeedLimiter.Delete(format.UserTag(tag, deleted[i].Uuid))
+		l.UserOnlineIP.Delete(format.UserTag(tag, deleted[i].Uuid))
 		delete(l.UUIDtoUID, deleted[i].Uuid)
 	}
 	for i := range added {
+		l.SpeedLimiter.Delete(format.UserTag(tag, added[i].Uuid))
 		userLimit := &UserLimitInfo{
 			UID: added[i].Id,
 		}
@@ -124,6 +135,8 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 }
 
 func (l *Limiter) UpdateDynamicSpeedLimit(tag, uuid string, limit int, expire time.Time) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if v, ok := l.UserLimitInfo.Load(format.UserTag(tag, uuid)); ok {
 		info := v.(*UserLimitInfo)
 		info.DynamicSpeedLimit = limit
@@ -135,6 +148,8 @@ func (l *Limiter) UpdateDynamicSpeedLimit(tag, uuid string, limit int, expire ti
 }
 
 func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool) (Bucket *ratelimit.Bucket, Reject bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	// check if ipv4 mapped ipv6
 	ip = strings.TrimPrefix(ip, "::ffff:")
 
@@ -207,6 +222,8 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 }
 
 func (l *Limiter) GetOnlineDevice() (*[]panel.OnlineUser, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	var onlineUser []panel.OnlineUser
 	l.UserOnlineIP.Range(func(key, value interface{}) bool {
 		taguuid := key.(string)
@@ -228,4 +245,30 @@ func (l *Limiter) GetOnlineDevice() (*[]panel.OnlineUser, error) {
 type UserIpList struct {
 	Uid    int      `json:"Uid"`
 	IpList []string `json:"Ips"`
+}
+
+func (l *Limiter) UpdateAlive(alive map[int]int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.AliveList = alive
+}
+
+func (l *Limiter) SetOverLimit(user string, value bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if info, ok := l.UserLimitInfo.Load(user); ok {
+		info.(*UserLimitInfo).OverLimit = value
+	}
+}
+
+func (l *Limiter) ConsumeOverLimit(user string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if info, ok := l.UserLimitInfo.Load(user); ok {
+		u := info.(*UserLimitInfo)
+		value := u.OverLimit
+		u.OverLimit = false
+		return value
+	}
+	return false
 }

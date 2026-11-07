@@ -11,5 +11,6 @@ func TestTask(t *testing.T) {
 		log.Println("q")
 		return nil
 	}, Interval: time.Second}
+	t.Cleanup(func() { ts.Close(); ts.Wait() })
 	ts.Start(false)
 }

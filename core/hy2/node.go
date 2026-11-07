@@ -1,6 +1,7 @@
 package hy2
 
 import (
+	"fmt"
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/conf"
 	"github.com/apernet/hysteria/core/v2/server"
@@ -24,10 +25,10 @@ func (h *Hysteria2) AddNode(tag string, info *panel.NodeInfo, config *conf.Optio
 	if len(config.Hysteria2ConfigPath) != 0 {
 		v.SetConfigFile(config.Hysteria2ConfigPath)
 		if err := v.ReadInConfig(); err != nil {
-			h.Logger.Fatal("failed to read server config", zap.Error(err))
+			return fmt.Errorf("read hysteria server config: %w", err)
 		}
 		if err := v.Unmarshal(&c); err != nil {
-			h.Logger.Fatal("failed to parse server config", zap.Error(err))
+			return fmt.Errorf("parse hysteria server config: %w", err)
 		}
 	}
 	n := Hysteria2node{

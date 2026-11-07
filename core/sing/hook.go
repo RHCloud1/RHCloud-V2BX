@@ -14,6 +14,7 @@ import (
 	"github.com/InazumaV/V2bX/common/counter"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/log"
+	tun "github.com/sagernet/sing-tun"
 	N "github.com/sagernet/sing/common/network"
 )
 
@@ -32,6 +33,11 @@ func NewHookServer() *HookServer {
 		counter: sync.Map{},
 	}
 	return server
+}
+
+// Accelerated TUN flows are not used by V2bX's panel-managed proxy inbounds.
+func (h *HookServer) RoutedFlow(context.Context, adapter.InboundContext, adapter.Rule, adapter.Outbound) tun.FlowTracker {
+	return nil
 }
 
 func (h *HookServer) RoutedConnection(_ context.Context, conn net.Conn, m adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) net.Conn {
@@ -71,13 +77,8 @@ func (h *HookServer) RoutedConnection(_ context.Context, conn net.Conn, m adapte
 			}
 		}
 	}
-	var t *counter.TrafficCounter
-	if c, ok := h.counter.Load(m.Inbound); !ok {
-		t = counter.NewTrafficCounter()
-		h.counter.Store(m.Inbound, t)
-	} else {
-		t = c.(*counter.TrafficCounter)
-	}
+	value, _ := h.counter.LoadOrStore(m.Inbound, counter.NewTrafficCounter())
+	t := value.(*counter.TrafficCounter)
 	conn = counter.NewConnCounter(conn, t.GetCounter(m.User))
 	return conn
 }
@@ -119,13 +120,8 @@ func (h *HookServer) RoutedPacketConnection(_ context.Context, conn N.PacketConn
 			}
 		}
 	}
-	var t *counter.TrafficCounter
-	if c, ok := h.counter.Load(m.Inbound); !ok {
-		t = counter.NewTrafficCounter()
-		h.counter.Store(m.Inbound, t)
-	} else {
-		t = c.(*counter.TrafficCounter)
-	}
+	value, _ := h.counter.LoadOrStore(m.Inbound, counter.NewTrafficCounter())
+	t := value.(*counter.TrafficCounter)
 	conn = counter.NewPacketConnCounter(conn, t.GetCounter(m.User))
 	return conn
 }

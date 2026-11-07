@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
 	"runtime"
@@ -23,7 +24,7 @@ var (
 var serverCommand = cobra.Command{
 	Use:   "server",
 	Short: "Run V2bX server",
-	Run:   serverHandle,
+	RunE:  serverHandle,
 	Args:  cobra.NoArgs,
 }
 
@@ -37,13 +38,18 @@ func init() {
 	command.AddCommand(&serverCommand)
 }
 
-func serverHandle(_ *cobra.Command, _ []string) {
+func serverHandle(_ *cobra.Command, _ []string) error {
 	showVersion()
 	c := conf.New()
 	err := c.LoadFromPath(config)
 	if err != nil {
-		log.WithField("err", err).Error("Load config file failed")
-		return
+		return fmt.Errorf("load config: %w", err)
+	}
+	if err := c.Validate(); err != nil {
+		return fmt.Errorf("validate config: %w", err)
+	}
+	if err := checkCompiledCores(c); err != nil {
+		return err
 	}
 	switch c.LogConfig.Level {
 	case "debug":
@@ -70,26 +76,36 @@ func serverHandle(_ *cobra.Command, _ []string) {
 	vc, err := vCore.NewCore(c.CoresConfig)
 	if err != nil {
 		log.WithField("err", err).Error("new core failed")
-		return
+		return err
 	}
 	err = vc.Start()
 	if err != nil {
 		log.WithField("err", err).Error("Start core failed")
-		return
+		vc.Close()
+		return err
 	}
-	defer vc.Close()
+	defer func() { vc.Close() }()
 	log.Info("Core ", vc.Type(), " started")
 	nodes := node.New()
+	defer func() {
+		if err := nodes.Close(); err != nil {
+			log.WithError(err).Error("close nodes failed")
+		}
+	}()
 	err = nodes.Start(c.NodeConfig, vc)
 	if err != nil {
 		log.WithField("err", err).Error("Run nodes failed")
-		return
+		return err
 	}
 	log.Info("Nodes started")
 	xdns := os.Getenv("XRAY_DNS_PATH")
 	sdns := os.Getenv("SING_DNS_PATH")
 	if watch {
 		err = c.Watch(config, xdns, sdns, func() {
+			if err := checkCompiledCores(c); err != nil {
+				log.WithError(err).Error("Keep running cores: new original configuration is invalid")
+				return
+			}
 			nodes.Close()
 			err = vc.Close()
 			if err != nil {
@@ -117,7 +133,7 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		})
 		if err != nil {
 			log.WithField("err", err).Error("start watch failed")
-			return
+			return err
 		}
 	}
 	// clear memory
@@ -128,4 +144,5 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		signal.Notify(osSignals, syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
 		<-osSignals
 	}
+	return nil
 }

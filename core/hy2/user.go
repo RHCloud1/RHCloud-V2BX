@@ -59,11 +59,11 @@ func (h *Hysteria2) DelUsers(users []panel.UserInfo, tag string) error {
 func (h *Hysteria2) GetUserTraffic(tag string, uuid string, reset bool) (up int64, down int64) {
 	if v, ok := h.Hy2nodes[tag].TrafficLogger.(*HookServer).Counter.Load(tag); ok {
 		c := v.(*counter.TrafficCounter)
+		if reset {
+			return c.Take(uuid)
+		}
 		up = c.GetUpCount(uuid)
 		down = c.GetDownCount(uuid)
-		if reset {
-			c.Reset(uuid)
-		}
 		return up, down
 	}
 	return 0, 0

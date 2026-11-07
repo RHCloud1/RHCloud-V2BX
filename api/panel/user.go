@@ -58,11 +58,13 @@ func (c *Client) GetUserList() (UserList []UserInfo, err error) {
 	if err := json.Unmarshal(r.Body(), &userList); err != nil {
 		return nil, fmt.Errorf("unmarshal userlist error: %s", err)
 	}
-	c.userEtag = r.Header().Get("ETag")
 
-	var userinfos []UserInfo
-	var deviceLimit, localDeviceLimit int = 0, 0
+	if userList == nil || userList.Users == nil {
+		return nil, fmt.Errorf("user response must contain a users array")
+	}
+	userinfos := make([]UserInfo, 0, len(userList.Users))
 	for _, user := range userList.Users {
+		deviceLimit := user.DeviceLimit
 		// If there is still device available, add the user
 		if user.DeviceLimit > 0 && user.AliveIp > 0 {
 			lastOnline := 0
@@ -70,7 +72,7 @@ func (c *Client) GetUserList() (UserList []UserInfo, err error) {
 				lastOnline = v
 			}
 			// If there are any available device.
-			localDeviceLimit = user.DeviceLimit - user.AliveIp + lastOnline
+			localDeviceLimit := user.DeviceLimit - user.AliveIp + lastOnline
 			if localDeviceLimit > 0 {
 				deviceLimit = localDeviceLimit
 			} else if lastOnline > 0 {
@@ -83,6 +85,7 @@ func (c *Client) GetUserList() (UserList []UserInfo, err error) {
 		userinfos = append(userinfos, user)
 	}
 
+	c.userEtag = r.Header().Get("ETag")
 	return userinfos, nil
 }
 
@@ -138,7 +141,7 @@ func (c *Client) ReportNodeOnlineUsers(data *map[int][]string) error {
 	err = c.checkResponse(r, path, err)
 
 	if err != nil {
-		return nil
+		return err
 	}
 
 	return nil

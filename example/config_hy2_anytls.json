@@ -1,0 +1,46 @@
+{
+  "Log": { "Level": "info" },
+  "Cores": [
+    { "Type": "hysteria2", "Name": "hy2-direct", "Log": { "Level": "error" } },
+    {
+      "Type": "sing",
+      "Name": "anytls-residential",
+      "Log": { "Level": "error", "Timestamp": true },
+      "OriginalPath": "/etc/V2bX/sing_residential.json"
+    }
+  ],
+  "Nodes": [
+    {
+      "Core": "hysteria2",
+      "CoreName": "hy2-direct",
+      "ApiHost": "https://panel.example.com",
+      "ApiKey": "replace-with-panel-api-key",
+      "NodeID": 2,
+      "NodeType": "hysteria2",
+      "ListenIP": "::",
+      "CertConfig": {
+        "CertMode": "http",
+        "CertDomain": "hy.example.com",
+        "CertFile": "/etc/V2bX/certs/{domain}/fullchain.cer",
+        "KeyFile": "/etc/V2bX/certs/{domain}/cert.key",
+        "Email": "admin@example.com"
+      }
+    },
+    {
+      "Core": "sing",
+      "CoreName": "anytls-residential",
+      "ApiHost": "https://panel.example.com",
+      "ApiKey": "replace-with-panel-api-key",
+      "NodeID": 7,
+      "NodeType": "anytls",
+      "ListenIP": "0.0.0.0",
+      "CertConfig": {
+        "CertMode": "http",
+        "CertDomain": "any.example.com",
+        "CertFile": "/etc/V2bX/certs/{domain}/fullchain.cer",
+        "KeyFile": "/etc/V2bX/certs/{domain}/cert.key",
+        "Email": "admin@example.com"
+      }
+    }
+  ]
+}

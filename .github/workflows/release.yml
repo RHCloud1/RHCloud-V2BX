@@ -9,12 +9,14 @@ on:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
+      - "script/**"
       - ".github/workflows/release.yml"
   pull_request:
     paths:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
+      - "script/**"
       - ".github/workflows/release.yml"
   release:
     types: [published]
@@ -62,6 +64,17 @@ jobs:
             echo "VERSION=${GITHUB_SHA}" >> "$GITHUB_ENV"
           fi
 
+      - name: Test on Linux amd64
+        if: matrix.goarch == 'amd64'
+        shell: bash
+        run: |
+          go test -timeout 120s -tags "sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" ./...
+          bash -n script/install.sh
+          bash -n script/V2bX.sh
+          bash -n script/initconfig.sh
+          bash script/tests/wizard.sh
+          bash script/tests/installer.sh
+
       - name: Build
         shell: bash
         run: |
@@ -76,6 +89,8 @@ jobs:
         run: |
           cp README.md LICENSE build_assets/
           cp example/*.json build_assets/
+          cp script/*.sh script/*.service build_assets/
+          cp -R docs build_assets/docs
           curl -fL --retry 3 \
             https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat \
             -o build_assets/geoip.dat
@@ -90,6 +105,7 @@ jobs:
           zip -9vr "../V2bX-${{ matrix.asset_name }}.zip" .
           popd
           FILE="V2bX-${{ matrix.asset_name }}.zip"
+          sha256sum "$FILE" > "${FILE}.sha256"
           for METHOD in md5 sha1 sha256 sha512; do
             openssl dgst "-${METHOD}" "$FILE" | sed 's/([^)]*)//g' >> "${FILE}.dgst"
           done
@@ -101,6 +117,7 @@ jobs:
           path: |
             V2bX-${{ matrix.asset_name }}.zip
             V2bX-${{ matrix.asset_name }}.zip.dgst
+            V2bX-${{ matrix.asset_name }}.zip.sha256
 
       - name: Upload release assets
         if: github.event_name == 'release'
@@ -109,3 +126,4 @@ jobs:
           files: |
             V2bX-${{ matrix.asset_name }}.zip
             V2bX-${{ matrix.asset_name }}.zip.dgst
+            V2bX-${{ matrix.asset_name }}.zip.sha256

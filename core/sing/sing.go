@@ -2,8 +2,10 @@ package sing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/sagernet/sing-box/include"
@@ -25,6 +27,7 @@ type DNSConfig struct {
 }
 
 type Sing struct {
+	nodesMu    sync.Mutex
 	box        *box.Box
 	ctx        context.Context
 	hookServer *HookServer
@@ -34,25 +37,47 @@ type Sing struct {
 }
 
 type nodeState struct {
-	info   *panel.NodeInfo
-	config *conf.Options
-	users  []panel.UserInfo
+	inbound adapter.Inbound
+	scope   *adapter.Scope
+	info    *panel.NodeInfo
+	config  *conf.Options
+	users   []panel.UserInfo
 }
 
 func init() {
 	vCore.RegisterCore("sing", New)
+	vCore.RegisterConfigValidator("sing", func(c *conf.CoreConfig) error {
+		if c.SingConfig == nil || c.SingConfig.OriginalPath == "" {
+			return nil
+		}
+		_, err := readOriginal(c.SingConfig.OriginalPath)
+		return err
+	})
+}
+
+func singContext() context.Context {
+	ctx := context.Background()
+	return box.Context(ctx, include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+}
+
+func readOriginal(path string) (option.Options, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return option.Options{}, err
+	}
+	opts, err := json.UnmarshalExtendedContext[option.Options](singContext(), data)
+	if err != nil {
+		return opts, fmt.Errorf("invalid sing-box OriginalPath %q; inspect with V2bX migrate-sing before updating: %w", path, err)
+	}
+	return opts, nil
 }
 
 func New(c *conf.CoreConfig) (vCore.Core, error) {
-	ctx := context.Background()
-	ctx = box.Context(ctx, include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry())
+	ctx := singContext()
 	options := option.Options{}
 	if len(c.SingConfig.OriginalPath) != 0 {
-		data, err := os.ReadFile(c.SingConfig.OriginalPath)
-		if err != nil {
-			return nil, fmt.Errorf("read original config error: %s", err)
-		}
-		options, err = json.UnmarshalExtendedContext[option.Options](ctx, data)
+		var err error
+		options, err = readOriginal(c.SingConfig.OriginalPath)
 		if err != nil {
 			return nil, fmt.Errorf("unmarshal original config error: %s", err)
 		}
@@ -96,7 +121,16 @@ func (b *Sing) Start() error {
 }
 
 func (b *Sing) Close() error {
-	return b.box.Close()
+	b.nodesMu.Lock()
+	defer b.nodesMu.Unlock()
+	var errs []error
+	for tag, state := range b.nodes {
+		if state.scope != nil {
+			errs = append(errs, state.scope.Close())
+		}
+		delete(b.nodes, tag)
+	}
+	return errors.Join(append(errs, b.box.Close())...)
 }
 
 func (b *Sing) Protocols() []string {
@@ -108,6 +142,7 @@ func (b *Sing) Protocols() []string {
 		"hysteria",
 		"hysteria2",
 		"anytls",
+		"naive",
 	}
 }
 

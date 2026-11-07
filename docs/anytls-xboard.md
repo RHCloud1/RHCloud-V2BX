@@ -21,8 +21,8 @@
   "CertConfig": {
     "CertMode": "http",
     "CertDomain": "node.example.com",
-    "CertFile": "/etc/V2bX/fullchain.cer",
-    "KeyFile": "/etc/V2bX/cert.key",
+    "CertFile": "/etc/V2bX/certs/{domain}/fullchain.cer",
+    "KeyFile": "/etc/V2bX/certs/{domain}/cert.key",
     "Email": "admin@example.com"
   }
 }
@@ -48,7 +48,7 @@ AnyTLS 不需要安装独立内核或额外系统软件。它已经编译进 V2b
 ## 当前版本
 
 - Go: 1.25
-- sing-box: 1.13.13
+- sing-box: 1.14.4
 - Hysteria: 2.9.2
 - Xray: 1.251208.0
 

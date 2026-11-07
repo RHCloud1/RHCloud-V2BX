@@ -17,28 +17,17 @@ type HookServer struct {
 }
 
 func (h *HookServer) LogTraffic(id string, tx, rx uint64) (ok bool) {
-	var c interface{}
-	var exists bool
-
 	limiterinfo, err := limiter.GetLimiter(h.Tag)
 	if err != nil {
 		h.logger.Error("Get limiter error", zap.String("tag", h.Tag), zap.Error(err))
 		return false
 	}
 
-	userLimit, ok := limiterinfo.UserLimitInfo.Load(format.UserTag(h.Tag, id))
-	if ok {
-		userlimitInfo := userLimit.(*limiter.UserLimitInfo)
-		if userlimitInfo.OverLimit {
-			userlimitInfo.OverLimit = false
-			return false
-		}
+	if limiterinfo.ConsumeOverLimit(format.UserTag(h.Tag, id)) {
+		return false
 	}
 
-	if c, exists = h.Counter.Load(h.Tag); !exists {
-		c = counter.NewTrafficCounter()
-		h.Counter.Store(h.Tag, c)
-	}
+	c, _ := h.Counter.LoadOrStore(h.Tag, counter.NewTrafficCounter())
 
 	if tc, ok := c.(*counter.TrafficCounter); ok {
 		tc.Rx(id, int(rx))

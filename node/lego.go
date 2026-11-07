@@ -110,10 +110,12 @@ func (l *Lego) RenewCert() error {
 	if err != nil {
 		return fmt.Errorf("read cert file error: %s", err)
 	}
-	if e, err := l.CheckCert(file); !e {
-		return nil
-	} else if err != nil {
+	due, err := l.CheckCert(file)
+	if err != nil {
 		return fmt.Errorf("check cert error: %s", err)
+	}
+	if !due {
+		return nil
 	}
 	res, err := l.client.Certificate.Renew(certificate.Resource{
 		Domain:      l.config.CertDomain,
@@ -158,7 +160,7 @@ func (l *Lego) writeCert(certificates *certificate.Resource) error {
 	if err != nil {
 		return fmt.Errorf("check path error: %s", err)
 	}
-	err = os.WriteFile(l.parseParams(l.config.KeyFile), certificates.PrivateKey, 0644)
+	err = os.WriteFile(l.parseParams(l.config.KeyFile), certificates.PrivateKey, 0600)
 	if err != nil {
 		return err
 	}
@@ -248,6 +250,7 @@ func (u *User) Save(path string) error {
 	if err != nil {
 		return err
 	}
+	defer f.Close()
 	err = json.NewEncoder(f).Encode(u)
 	if err != nil {
 		return fmt.Errorf("marshal json error: %s", err)

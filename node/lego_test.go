@@ -1,41 +1,18 @@
 package node
 
 import (
-	"log"
 	"os"
+	"path/filepath"
 	"testing"
-
-	"github.com/InazumaV/V2bX/conf"
 )
 
-var l *Lego
-
-func init() {
-	var err error
-	l, err = NewLego(&conf.CertConfig{
-		CertMode:   "dns",
-		Email:      "test@test.com",
-		CertDomain: "test.test.com",
-		Provider:   "cloudflare",
-		DNSEnv: map[string]string{
-			"CF_DNS_API_TOKEN": "123",
-		},
-		CertFile: "./cert/1.pem",
-		KeyFile:  "./cert/1.key",
-	})
-	if err != nil {
-		log.Println(err)
-		os.Exit(1)
+func TestLegoRenewMalformedCertificate(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "bad.pem")
+	if err := os.WriteFile(p, []byte("invalid certificate"), 0600); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestLego_CreateCertByDns(t *testing.T) {
-	err := l.CreateCert()
-	if err != nil {
-		t.Error(err)
+	l := &Lego{config: certConfig("example.com", p, p+".key", "http")}
+	if err := l.RenewCert(); err == nil {
+		t.Fatal("malformed certificates must not be silently ignored")
 	}
-}
-
-func TestLego_RenewCert(t *testing.T) {
-	log.Println(l.RenewCert())
 }

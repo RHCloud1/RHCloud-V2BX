@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"reflect"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +37,7 @@ type NodeInfo struct {
 	Hysteria    *HysteriaNode
 	Hysteria2   *Hysteria2Node
 	AnyTls      *AnyTlsNode
+	Naive       *NaiveNode
 	Common      *CommonNode
 }
 
@@ -148,6 +149,13 @@ type AnyTlsNode struct {
 	PaddingScheme StringList `json:"padding_scheme,omitempty"`
 }
 
+// NaiveNode is Xboard's "naive" node. Xboard sends tls as 0/1, but NaiveProxy
+// clients always speak HTTPS, so V2bX serves it with TLS regardless.
+type NaiveNode struct {
+	CommonNode
+	Tls int `json:"tls"`
+}
+
 type RawDNS struct {
 	DNSMap  map[string]map[string]interface{}
 	DNSJson []byte
@@ -166,18 +174,19 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 		ForceContentType("application/json").
 		Get(path)
 
+	if err = c.checkResponse(r, path, err); err != nil {
+		return nil, err
+	}
 	if r.StatusCode() == 304 {
+		if c.responseBodyHash == "" {
+			return nil, fmt.Errorf("node config returned 304 before a successful response")
+		}
 		return nil, nil
 	}
 	hash := sha256.Sum256(r.Body())
 	newBodyHash := hex.EncodeToString(hash[:])
 	if c.responseBodyHash == newBodyHash {
 		return nil, nil
-	}
-	c.responseBodyHash = newBodyHash
-	c.nodeEtag = r.Header().Get("ETag")
-	if err = c.checkResponse(r, path, err); err != nil {
-		return nil, err
 	}
 
 	if r != nil {
@@ -274,21 +283,41 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 		cm = &rsp.CommonNode
 		node.AnyTls = rsp
 		node.Security = Tls
+	case "naive":
+		rsp := &NaiveNode{}
+		err = json.Unmarshal(r.Body(), rsp)
+		if err != nil {
+			return nil, fmt.Errorf("decode naive params error: %s", err)
+		}
+		cm = &rsp.CommonNode
+		node.Naive = rsp
+		node.Security = Tls
 	}
 
 	// parse rules and dns
+	if cm == nil || cm.ServerPort < 1 || cm.ServerPort > 65535 {
+		return nil, fmt.Errorf("node config has no valid server_port")
+	}
 	for i := range cm.Routes {
 		var matchs []string
-		if _, ok := cm.Routes[i].Match.(string); ok {
-			matchs = strings.Split(cm.Routes[i].Match.(string), ",")
-		} else if _, ok = cm.Routes[i].Match.([]string); ok {
-			matchs = cm.Routes[i].Match.([]string)
-		} else {
-			temp := cm.Routes[i].Match.([]interface{})
-			matchs = make([]string, len(temp))
-			for i := range temp {
-				matchs[i] = temp[i].(string)
+		switch match := cm.Routes[i].Match.(type) {
+		case string:
+			matchs = strings.Split(match, ",")
+		case []string:
+			matchs = match
+		case []interface{}:
+			for _, value := range match {
+				text, ok := value.(string)
+				if !ok {
+					return nil, fmt.Errorf("route match must contain strings")
+				}
+				matchs = append(matchs, text)
 			}
+		default:
+			return nil, fmt.Errorf("route match must be a string or string list")
+		}
+		if len(matchs) == 0 {
+			return nil, fmt.Errorf("route match is empty")
 		}
 		switch cm.Routes[i].Action {
 		case "block":
@@ -317,27 +346,34 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	}
 
 	// set interval
-	node.PushInterval = intervalToTime(cm.BaseConfig.PushInterval)
-	node.PullInterval = intervalToTime(cm.BaseConfig.PullInterval)
+	node.PushInterval, node.PullInterval = time.Minute, time.Minute
+	if cm.BaseConfig != nil {
+		node.PushInterval = intervalToTime(cm.BaseConfig.PushInterval)
+		node.PullInterval = intervalToTime(cm.BaseConfig.PullInterval)
+	}
 
 	node.Common = cm
 	// clear
 	cm.Routes = nil
 	cm.BaseConfig = nil
+	c.responseBodyHash = newBodyHash
+	c.nodeEtag = r.Header().Get("ETag")
 
 	return node, nil
 }
 
 func intervalToTime(i interface{}) time.Duration {
-	switch reflect.TypeOf(i).Kind() {
-	case reflect.Int:
-		return time.Duration(i.(int)) * time.Second
-	case reflect.String:
-		i, _ := strconv.Atoi(i.(string))
-		return time.Duration(i) * time.Second
-	case reflect.Float64:
-		return time.Duration(i.(float64)) * time.Second
-	default:
-		return time.Duration(reflect.ValueOf(i).Int()) * time.Second
+	var seconds float64
+	switch value := i.(type) {
+	case int:
+		seconds = float64(value)
+	case float64:
+		seconds = value
+	case string:
+		seconds, _ = strconv.ParseFloat(value, 64)
 	}
+	if math.IsNaN(seconds) || seconds < 1 || seconds > 365*24*60*60 {
+		return time.Minute
+	}
+	return time.Duration(seconds * float64(time.Second))
 }
