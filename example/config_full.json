@@ -92,6 +92,9 @@
       // API接口地址
       "ApiHost": "http://127.0.0.1",
 
+      // 访问面板 API 时使用的本机源 IP（多 IP 服务器可用），留空为系统默认
+      "ApiSendIP": "",
+
       // API密钥，即Token
       "ApiKey": "test",
 
@@ -110,6 +113,9 @@
       // 发送IP
       "SendIP": "0.0.0.0",
 
+      // 单个用户在一个上报周期内流量不超过该值（KB）时暂不上报，累计超过后再一起上报，0 为不限制
+      "ReportMinTraffic": 0,
+
       // 开启 Proxy Protocol，参见 https://github.com/haproxy/haproxy/blob/master/doc/proxy-protocol.txt
       "EnableProxyProtocol": false,
 
@@ -124,17 +130,8 @@
 
       // 限制器相关配置
       "LimitConfig": {
-        // 开启实时连接数及IP数限制
-        "EnableRealtime": false,
-
         // 用户速度限制
         "SpeedLimit": 0,
-
-        // 用户IP限制
-        "IPLimit": 0,
-
-        // 用户连接数限制
-        "ConnLimit": 0,
 
         // 开启动态限速
         "EnableDynamicSpeedLimit": false,

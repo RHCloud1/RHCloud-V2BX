@@ -82,7 +82,7 @@ func (b *Sing) GetUserTraffic(tag, uuid string, reset bool) (up int64, down int6
 	return 0, 0
 }
 
-func (b *Sing) DelUsers(users []panel.UserInfo, tag string) error {
+func (b *Sing) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) error {
 	b.nodesMu.Lock()
 	defer b.nodesMu.Unlock()
 	state, found := b.nodes[tag]
@@ -102,5 +102,14 @@ func (b *Sing) DelUsers(users []panel.UserInfo, tag string) error {
 	if len(kept) == len(state.users) {
 		return nil
 	}
-	return b.replaceUsers(tag, state, kept)
+	if err := b.replaceUsers(tag, state, kept); err != nil {
+		return err
+	}
+	if v, ok := b.hookServer.counter.Load(tag); ok {
+		c := v.(*counter.TrafficCounter)
+		for uuid := range deleted {
+			c.Delete(uuid)
+		}
+	}
+	return nil
 }

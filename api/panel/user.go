@@ -2,8 +2,11 @@ package panel
 
 import (
 	"fmt"
+	"io"
+	"strings"
 
 	"github.com/goccy/go-json"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 type OnlineUser struct {
@@ -12,81 +15,60 @@ type OnlineUser struct {
 }
 
 type UserInfo struct {
-	Id          int    `json:"id"`
-	Uuid        string `json:"uuid"`
-	SpeedLimit  int    `json:"speed_limit"`
-	DeviceLimit int    `json:"device_limit"`
-	AliveIp     int    `json:"alive_ip"`
+	Id          int    `json:"id" msgpack:"id"`
+	Uuid        string `json:"uuid" msgpack:"uuid"`
+	SpeedLimit  int    `json:"speed_limit" msgpack:"speed_limit"`
+	DeviceLimit int    `json:"device_limit" msgpack:"device_limit"`
 }
 
 type UserListBody struct {
-	//Msg  string `json:"msg"`
-	Users []UserInfo `json:"users"`
+	Users []UserInfo `json:"users" msgpack:"users"`
 }
 
 type AliveMap struct {
 	Alive map[int]int `json:"alive"`
 }
 
-// GetUserList will pull user form sspanel
-func (c *Client) GetUserList() (UserList []UserInfo, err error) {
+// GetUserList will pull user from v2board
+func (c *Client) GetUserList() ([]UserInfo, error) {
 	const path = "/api/v1/server/UniProxy/user"
 	r, err := c.client.R().
 		SetHeader("If-None-Match", c.userEtag).
-		ForceContentType("application/json").
+		SetHeader("X-Response-Format", "msgpack").
+		SetDoNotParseResponse(true).
 		Get(path)
+	if r != nil && r.RawResponse != nil {
+		defer r.RawResponse.Body.Close()
+	}
 	if err = c.checkResponse(r, path, err); err != nil {
 		return nil, err
 	}
+	if r.RawResponse == nil {
+		return nil, fmt.Errorf("panel request %s returned no response", path)
+	}
+	if r.StatusCode() == 304 {
+		return nil, nil
+	}
 
-	if r != nil {
-		defer func() {
-			if r.RawBody() != nil {
-				r.RawBody().Close()
-			}
-		}()
-		if r.StatusCode() == 304 {
-			return nil, nil
+	userList := &UserListBody{}
+	if strings.Contains(r.Header().Get("Content-Type"), "application/x-msgpack") {
+		if err := msgpack.NewDecoder(r.RawResponse.Body).Decode(userList); err != nil {
+			return nil, fmt.Errorf("decode user list error: %w", err)
 		}
 	} else {
-		return nil, fmt.Errorf("received nil response")
+		body, err := io.ReadAll(r.RawResponse.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read user list error: %w", err)
+		}
+		if err := json.Unmarshal(body, userList); err != nil {
+			return nil, fmt.Errorf("unmarshal userlist error: %s", err)
+		}
 	}
-	var userList *UserListBody
-	if err != nil {
-		return nil, fmt.Errorf("read body error: %s", err)
-	}
-	if err := json.Unmarshal(r.Body(), &userList); err != nil {
-		return nil, fmt.Errorf("unmarshal userlist error: %s", err)
-	}
-
-	if userList == nil || userList.Users == nil {
+	if userList.Users == nil {
 		return nil, fmt.Errorf("user response must contain a users array")
 	}
-	userinfos := make([]UserInfo, 0, len(userList.Users))
-	for _, user := range userList.Users {
-		deviceLimit := user.DeviceLimit
-		// If there is still device available, add the user
-		if user.DeviceLimit > 0 && user.AliveIp > 0 {
-			lastOnline := 0
-			if v, ok := c.LastReportOnline[user.Id]; ok {
-				lastOnline = v
-			}
-			// If there are any available device.
-			localDeviceLimit := user.DeviceLimit - user.AliveIp + lastOnline
-			if localDeviceLimit > 0 {
-				deviceLimit = localDeviceLimit
-			} else if lastOnline > 0 {
-				deviceLimit = lastOnline
-			} else {
-				continue
-			}
-		}
-		user.DeviceLimit = deviceLimit
-		userinfos = append(userinfos, user)
-	}
-
 	c.userEtag = r.Header().Get("ETag")
-	return userinfos, nil
+	return userList.Users, nil
 }
 
 // GetUserAlive fetches the panel-side online IP count for each user.

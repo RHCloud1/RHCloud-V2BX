@@ -2,6 +2,7 @@ package panel
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -18,17 +19,24 @@ import (
 type Client struct {
 	client           *resty.Client
 	APIHost          string
+	APISendIP        string
 	Token            string
 	NodeType         string
 	NodeId           int
 	nodeEtag         string
 	userEtag         string
 	responseBodyHash string
-	LastReportOnline map[int]int
 }
 
 func New(c *conf.ApiConfig) (*Client, error) {
-	client := resty.New()
+	var client *resty.Client
+	if c.APISendIP != "" {
+		client = resty.NewWithLocalAddr(&net.TCPAddr{
+			IP: net.ParseIP(c.APISendIP),
+		})
+	} else {
+		client = resty.New()
+	}
 	client.SetLogger(redactingLogger{token: c.Key})
 	client.SetRetryCount(3)
 	if c.Timeout > 0 {
@@ -48,6 +56,7 @@ func New(c *conf.ApiConfig) (*Client, error) {
 		"shadowsocks",
 		"hysteria",
 		"hysteria2",
+		"tuic",
 		"anytls",
 		"naive",
 		"vless":
@@ -61,11 +70,12 @@ func New(c *conf.ApiConfig) (*Client, error) {
 		"token":     c.Key,
 	})
 	return &Client{
-		client:   client,
-		Token:    c.Key,
-		APIHost:  c.APIHost,
-		NodeType: c.NodeType,
-		NodeId:   c.NodeID,
+		client:    client,
+		Token:     c.Key,
+		APIHost:   c.APIHost,
+		APISendIP: c.APISendIP,
+		NodeType:  c.NodeType,
+		NodeId:    c.NodeID,
 	}, nil
 }
 

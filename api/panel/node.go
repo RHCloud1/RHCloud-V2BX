@@ -2,7 +2,6 @@ package panel
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -10,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/InazumaV/V2bX/common/crypt"
 	"github.com/goccy/go-json"
 )
 
@@ -34,6 +32,7 @@ type NodeInfo struct {
 	VAllss      *VAllssNode
 	Shadowsocks *ShadowsocksNode
 	Trojan      *TrojanNode
+	Tuic        *TuicNode
 	Hysteria    *HysteriaNode
 	Hysteria2   *Hysteria2Node
 	AnyTls      *AnyTlsNode
@@ -69,6 +68,8 @@ type VAllssNode struct {
 	Network             string          `json:"network"`
 	NetworkSettings     json.RawMessage `json:"network_settings"`
 	NetworkSettingsBack json.RawMessage `json:"networkSettings"`
+	Encryption          string          `json:"encryption"`
+	EncryptionSettings  EncSettings     `json:"encryption_settings"`
 	ServerName          string          `json:"server_name"`
 
 	// vless only
@@ -77,12 +78,20 @@ type VAllssNode struct {
 }
 
 type TlsSettings struct {
-	ServerName string `json:"server_name"`
-	Dest       string `json:"dest"`
-	ServerPort string `json:"server_port"`
-	ShortId    string `json:"short_id"`
-	PrivateKey string `json:"private_key"`
-	Xver       uint64 `json:"xver,string"`
+	ServerName  string `json:"server_name"`
+	Dest        string `json:"dest"`
+	ServerPort  string `json:"server_port"`
+	ShortId     string `json:"short_id"`
+	PrivateKey  string `json:"private_key"`
+	Mldsa65Seed string `json:"mldsa65Seed"`
+	Xver        uint64 `json:"xver,string"`
+}
+
+type EncSettings struct {
+	Mode          string `json:"mode"`
+	Ticket        string `json:"ticket"`
+	ServerPadding string `json:"server_padding"`
+	PrivateKey    string `json:"private_key"`
 }
 
 type RealityConfig struct {
@@ -104,6 +113,12 @@ type TrojanNode struct {
 	NetworkSettings json.RawMessage `json:"networkSettings"`
 }
 
+type TuicNode struct {
+	CommonNode
+	CongestionControl string `json:"congestion_control"`
+	ZeroRTTHandshake  bool   `json:"zero_rtt_handshake"`
+}
+
 type HysteriaNode struct {
 	CommonNode
 	UpMbps   int    `json:"up_mbps"`
@@ -113,10 +128,11 @@ type HysteriaNode struct {
 
 type Hysteria2Node struct {
 	CommonNode
-	UpMbps       int    `json:"up_mbps"`
-	DownMbps     int    `json:"down_mbps"`
-	ObfsType     string `json:"obfs"`
-	ObfsPassword string `json:"obfs-password"`
+	Ignore_Client_Bandwidth bool   `json:"ignore_client_bandwidth"`
+	UpMbps                  int    `json:"up_mbps"`
+	DownMbps                int    `json:"down_mbps"`
+	ObfsType                string `json:"obfs"`
+	ObfsPassword            string `json:"obfs-password"`
 }
 
 type StringList []string
@@ -226,18 +242,6 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 		cm = &rsp.CommonNode
 		node.VAllss = rsp
 		node.Security = node.VAllss.Tls
-		if len(rsp.NetworkSettings) > 0 {
-			err = json.Unmarshal(rsp.NetworkSettings, &rsp.RealityConfig)
-			if err != nil {
-				return nil, fmt.Errorf("decode reality config error: %s", err)
-			}
-		}
-		if node.Security == Reality {
-			if rsp.TlsSettings.PrivateKey == "" {
-				key := crypt.GenX25519Private([]byte("vless" + c.Token))
-				rsp.TlsSettings.PrivateKey = base64.RawURLEncoding.EncodeToString(key)
-			}
-		}
 	case "shadowsocks":
 		rsp := &ShadowsocksNode{}
 		err = json.Unmarshal(r.Body(), rsp)
@@ -255,6 +259,15 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 		}
 		cm = &rsp.CommonNode
 		node.Trojan = rsp
+		node.Security = Tls
+	case "tuic":
+		rsp := &TuicNode{}
+		err = json.Unmarshal(r.Body(), rsp)
+		if err != nil {
+			return nil, fmt.Errorf("decode tuic params error: %s", err)
+		}
+		cm = &rsp.CommonNode
+		node.Tuic = rsp
 		node.Security = Tls
 	case "hysteria":
 		rsp := &HysteriaNode{}

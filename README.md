@@ -10,7 +10,7 @@
 - Xboard AnyTLS 节点支持
 - Xboard Naive 节点支持（服务端；Xboard 订阅暂不输出 naive，见 [docs/naive-xboard.md](docs/naive-xboard.md)）
 
-支持 Vmess、Vless、Trojan、Shadowsocks、Hysteria、Hysteria2、AnyTLS 和 Naive 等协议。
+支持 Vmess、Vless、Trojan、Shadowsocks、Hysteria、Hysteria2、TUIC、AnyTLS 和 Naive 等协议。
 
 > 当前安装脚本只支持新格式的 Release（压缩包内含管理脚本，附带 `.sha256` 或 `.dgst`）。
 > 2026-06 的 `v0.0.0-anytls.20260611` 是旧格式，新脚本会拒绝安装；推送新脚本时需同时发布新 Release。
@@ -58,6 +58,7 @@ AnyTLS 必须启用 TLS。可使用 HTTP/DNS 自动申请、已有证书或自�
 - 本地验证与打包：[docs/local-build.md](docs/local-build.md)
 - 升级、迁移、诊断与回滚：[docs/operations.md](docs/operations.md)
 - 模拟验收与修复记录：[docs/simulation-20261108.md](docs/simulation-20261108.md)
+- 补齐 wyx2685 上游维护：[docs/changes-20261117.md](docs/changes-20261117.md)
 
 ## Release 文件
 

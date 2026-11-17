@@ -64,7 +64,8 @@ amd64 ZIP 另在隔离目录完成真实二进制安装、check 与不联网 doc
 - [x] 安装器：没有 `.sha256` 时从 `.dgst` 读取 SHA256；旧格式包给出明确提示；备份只保留最近 3 份（`V2BX_KEEP_BACKUPS`）。
 - [ ] Xboard 订阅输出 naive 节点（Xboard 补丁或插件），目前需要手动配置客户端。
 - [ ] VPS 上用 NaiveProxy 客户端实测 HTTP/2 / HTTP/3、流量上报和证书续期。
-- [ ] 逐条合入 wyx2685 在 2025-01 之后的 57 个提交（TUIC、MinReportTraffic、APISendIP、msgpack、xray 修复等）。
+- [x] 合入 wyx2685 到停更（71277de）为止的修复与功能（TUIC、ReportMinTraffic、ApiSendIP、msgpack、VLESS Encryption、xhttp、xray 断开删除用户等），见 `changes-20261117.md`。
+- [ ] VPS 上实测 TUIC、VLESS Encryption、xray xhttp。
 
 说明见 `naive-xboard.md`。
 

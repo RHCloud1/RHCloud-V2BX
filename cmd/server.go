@@ -141,7 +141,7 @@ func serverHandle(_ *cobra.Command, _ []string) error {
 	// wait exit signal
 	{
 		osSignals := make(chan os.Signal, 1)
-		signal.Notify(osSignals, syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
+		signal.Notify(osSignals, syscall.SIGINT, syscall.SIGTERM)
 		<-osSignals
 	}
 	return nil

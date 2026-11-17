@@ -10,6 +10,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var _ server.TrafficLogger = (*HookServer)(nil)
+
 type HookServer struct {
 	Tag     string
 	logger  *zap.Logger

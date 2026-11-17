@@ -41,7 +41,15 @@ func (h *Hysteria2) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
 	return len(p.Users), nil
 }
 
-func (h *Hysteria2) DelUsers(users []panel.UserInfo, tag string) error {
+func (h *Hysteria2) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) error {
+	if node, ok := h.Hy2nodes[tag]; ok {
+		if v, ok := node.TrafficLogger.(*HookServer).Counter.Load(tag); ok {
+			c := v.(*counter.TrafficCounter)
+			for _, user := range users {
+				c.Delete(user.Uuid)
+			}
+		}
+	}
 	var wg sync.WaitGroup
 	for _, user := range users {
 		wg.Add(1)

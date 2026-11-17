@@ -100,16 +100,16 @@ func configure(input io.Reader, output io.Writer, path string) error {
 		}
 		protocol := "hysteria2"
 		if coreType != "hysteria2" {
-			choice, err := p.ask("协议：1.Shadowsocks 2.VLESS 3.VMess 4.Hysteria 5.Hysteria2 6.Trojan 7.AnyTLS 8.Naive：", "", false)
+			choice, err := p.ask("协议：1.Shadowsocks 2.VLESS 3.VMess 4.Hysteria 5.Hysteria2 6.Trojan 7.AnyTLS 8.Naive 9.TUIC：", "", false)
 			if err != nil {
 				return err
 			}
-			protocols := map[string]string{"1": "shadowsocks", "2": "vless", "3": "vmess", "4": "hysteria", "5": "hysteria2", "6": "trojan", "7": "anytls", "8": "naive"}
+			protocols := map[string]string{"1": "shadowsocks", "2": "vless", "3": "vmess", "4": "hysteria", "5": "hysteria2", "6": "trojan", "7": "anytls", "8": "naive", "9": "tuic"}
 			protocol, ok = protocols[choice]
 			if !ok {
 				return fmt.Errorf("invalid protocol selection")
 			}
-			if coreType == "xray" && (protocol == "anytls" || protocol == "naive" || strings.HasPrefix(protocol, "hysteria")) {
+			if coreType == "xray" && (protocol == "anytls" || protocol == "naive" || protocol == "tuic" || strings.HasPrefix(protocol, "hysteria")) {
 				return fmt.Errorf("Xray does not support this protocol")
 			}
 		}
@@ -121,7 +121,7 @@ func configure(input io.Reader, output io.Writer, path string) error {
 			return fmt.Errorf("invalid listen IP")
 		}
 		cert := conf.NewCertConfig()
-		tlsRequired := protocol == "anytls" || protocol == "naive" || protocol == "trojan" || strings.HasPrefix(protocol, "hysteria")
+		tlsRequired := protocol == "anytls" || protocol == "naive" || protocol == "tuic" || protocol == "trojan" || strings.HasPrefix(protocol, "hysteria")
 		if !tlsRequired {
 			answer, err = p.ask("是否使用 TLS 证书？[y/N]（Reality 选 n）：", "n", false)
 			if err != nil {

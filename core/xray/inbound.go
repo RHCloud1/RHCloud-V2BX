@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/InazumaV/V2bX/api/panel"
@@ -133,12 +134,14 @@ func buildInbound(option *conf.Options, nodeInfo *panel.NodeInfo, tag string) (*
 		in.StreamSetting.REALITYSettings = &coreConf.REALITYConfig{
 			Dest:         d,
 			Xver:         xver,
+			Show:         false,
 			ServerNames:  []string{v.TlsSettings.ServerName},
 			PrivateKey:   v.TlsSettings.PrivateKey,
 			MinClientVer: v.RealityConfig.MinClientVer,
 			MaxClientVer: v.RealityConfig.MaxClientVer,
 			MaxTimeDiff:  uint64(mtd.Microseconds()),
 			ShortIds:     []string{v.TlsSettings.ShortId},
+			Mldsa65Seed:  v.TlsSettings.Mldsa65Seed,
 		}
 	default:
 		break
@@ -168,8 +171,27 @@ func buildV2ray(config *conf.Options, nodeInfo *panel.NodeInfo, inbound *coreCon
 			inbound.Settings = (*json.RawMessage)(&s)
 		} else {
 			var err error
+			decryption := "none"
+			if nodeInfo.VAllss.Encryption != "" {
+				switch nodeInfo.VAllss.Encryption {
+				case "mlkem768x25519plus":
+					encSettings := nodeInfo.VAllss.EncryptionSettings
+					parts := []string{
+						"mlkem768x25519plus",
+						encSettings.Mode,
+						encSettings.Ticket,
+					}
+					if encSettings.ServerPadding != "" {
+						parts = append(parts, encSettings.ServerPadding)
+					}
+					parts = append(parts, encSettings.PrivateKey)
+					decryption = strings.Join(parts, ".")
+				default:
+					return fmt.Errorf("vless decryption method %s is not support", nodeInfo.VAllss.Encryption)
+				}
+			}
 			s, err := json.Marshal(&coreConf.VLessInboundConfig{
-				Decryption: "none",
+				Decryption: decryption,
 			})
 			if err != nil {
 				return fmt.Errorf("marshal vless config error: %s", err)
@@ -190,7 +212,7 @@ func buildV2ray(config *conf.Options, nodeInfo *panel.NodeInfo, inbound *coreCon
 		return nil
 	}
 
-	t := coreConf.TransportProtocol(nodeInfo.VAllss.Network)
+	t := coreConf.TransportProtocol(v.Network)
 	inbound.StreamSetting = &coreConf.StreamConfig{Network: &t}
 	switch v.Network {
 	case "tcp":
@@ -207,6 +229,16 @@ func buildV2ray(config *conf.Options, nodeInfo *panel.NodeInfo, inbound *coreCon
 		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.GRPCSettings)
 		if err != nil {
 			return fmt.Errorf("unmarshal grpc settings error: %s", err)
+		}
+	case "httpupgrade":
+		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.HTTPUPGRADESettings)
+		if err != nil {
+			return fmt.Errorf("unmarshal httpupgrade settings error: %s", err)
+		}
+	case "splithttp", "xhttp":
+		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.SplitHTTPSettings)
+		if err != nil {
+			return fmt.Errorf("unmarshal xhttp settings error: %s", err)
 		}
 	default:
 		return errors.New("the network type is not vail")

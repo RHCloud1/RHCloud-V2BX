@@ -3,7 +3,6 @@ package core
 import (
 	"errors"
 	"fmt"
-	"github.com/hashicorp/go-multierror"
 	"strings"
 	"sync"
 
@@ -58,14 +57,13 @@ func (s *Selector) Start() error {
 }
 
 func (s *Selector) Close() error {
-	var errs error
+	var errs []error
 	for i := range s.cores {
-		err := s.cores[i].Close()
-		if err != nil {
-			errs = multierror.Append(errs, err)
+		if err := s.cores[i].Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return errs
+	return errors.Join(errs...)
 }
 
 func isSupported(protocol string, protocols []string) bool {
@@ -144,12 +142,12 @@ func (s *Selector) GetUserTraffic(tag, uuid string, reset bool) (up int64, down 
 	return t.(Core).GetUserTraffic(tag, uuid, reset)
 }
 
-func (s *Selector) DelUsers(users []panel.UserInfo, tag string) error {
+func (s *Selector) DelUsers(users []panel.UserInfo, tag string, info *panel.NodeInfo) error {
 	t, e := s.nodes.Load(tag)
 	if !e {
 		return errors.New("the node is not have")
 	}
-	return t.(Core).DelUsers(users, tag)
+	return t.(Core).DelUsers(users, tag, info)
 }
 
 func (s *Selector) Protocols() []string {

@@ -32,8 +32,12 @@ func (c *Controller) reportUserTraffic() (err error) {
 			c.pendingTraffic[uid] = pending
 		}
 	}
+	// Usage at or below ReportMinTraffic (KB) stays pending until it adds up.
+	minTraffic := c.Options.ReportMinTraffic * 1024
 	for _, traffic := range c.pendingTraffic {
-		userTraffic = append(userTraffic, traffic)
+		if traffic.Upload+traffic.Download > minTraffic {
+			userTraffic = append(userTraffic, traffic)
+		}
 	}
 	if len(userTraffic) > 0 {
 		err = c.apiClient.ReportUserTraffic(userTraffic)
@@ -43,8 +47,11 @@ func (c *Controller) reportUserTraffic() (err error) {
 				"err": err,
 			}).Info("Report user traffic failed")
 		} else {
-			clear(c.pendingTraffic)
+			for _, traffic := range userTraffic {
+				delete(c.pendingTraffic, traffic.UID)
+			}
 			log.WithField("tag", c.tag).Infof("Report %d users traffic", len(userTraffic))
+			log.WithField("tag", c.tag).Debugf("User traffic: %+v", userTraffic)
 		}
 	}
 
@@ -77,6 +84,7 @@ func (c *Controller) reportUserTraffic() (err error) {
 			}).Info("Report online users failed")
 		} else {
 			log.WithField("tag", c.tag).Infof("Total %d online users, %d Reported", len(*onlineDevice), len(result))
+			log.WithField("tag", c.tag).Debugf("Online users: %+v", data)
 		}
 	}
 

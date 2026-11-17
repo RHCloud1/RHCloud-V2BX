@@ -43,7 +43,7 @@ func TestUserNoopKeepsInbound(t *testing.T) {
 	if err != nil || added != 0 {
 		t.Fatalf("added=%d err=%v", added, err)
 	}
-	if err := b.DelUsers([]panel.UserInfo{{Uuid: "missing"}}, "test"); err != nil {
+	if err := b.DelUsers([]panel.UserInfo{{Uuid: "missing"}}, "test", nil); err != nil {
 		t.Fatal(err)
 	}
 	after := b.nodes["test"].inbound

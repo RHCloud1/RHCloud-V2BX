@@ -72,7 +72,11 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 	// get user alive
 	newA, err := c.apiClient.GetUserAlive()
 	if err != nil {
-		return err
+		log.WithFields(log.Fields{
+			"tag": c.tag,
+			"err": err,
+		}).Error("Get alive list failed")
+		return nil
 	}
 	if newN != nil {
 		if err := c.replacePanelNode(newN, newU, newA); err != nil {
@@ -101,7 +105,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 	}
 	if len(coreDeleted) > 0 {
 		// have deleted users
-		err = c.server.DelUsers(coreDeleted, c.tag)
+		err = c.server.DelUsers(coreDeleted, c.tag, c.info)
 		if err != nil {
 			c.apiClient.InvalidateCache()
 			log.WithFields(log.Fields{

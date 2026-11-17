@@ -126,7 +126,7 @@ func TestNaiveListenerAuthenticatesPanelUsers(t *testing.T) {
 	}
 
 	// Revoking the user on the panel must lock it out after the inbound rebuild.
-	if err := b.DelUsers([]panel.UserInfo{{Id: 1, Uuid: "good-uuid"}}, "naive-test"); err != nil {
+	if err := b.DelUsers([]panel.UserInfo{{Id: 1, Uuid: "good-uuid"}}, "naive-test", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := b.AddUsers(&core.AddUsersParams{Tag: "naive-test", Users: []panel.UserInfo{{Id: 2, Uuid: "next-uuid"}}}); err != nil {

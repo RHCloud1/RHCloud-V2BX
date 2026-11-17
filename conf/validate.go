@@ -13,7 +13,7 @@ import (
 )
 
 var coreProtocols = map[string][]string{
-	"sing":      {"vmess", "vless", "trojan", "shadowsocks", "hysteria", "hysteria2", "anytls", "naive"},
+	"sing":      {"vmess", "vless", "trojan", "shadowsocks", "tuic", "hysteria", "hysteria2", "anytls", "naive"},
 	"xray":      {"vmess", "vless", "trojan", "shadowsocks"},
 	"hysteria2": {"hysteria2"},
 }
@@ -124,7 +124,7 @@ func validateNode(n NodeConfig, cores map[string]string) error {
 	if cc != nil && cc.CertMode != "" {
 		mode = cc.CertMode
 	}
-	if (protocol == "anytls" || protocol == "naive" || protocol == "hysteria" || protocol == "hysteria2") && mode == "none" {
+	if (protocol == "anytls" || protocol == "naive" || protocol == "tuic" || protocol == "hysteria" || protocol == "hysteria2") && mode == "none" {
 		return fmt.Errorf("%s requires TLS; configure CertConfig", protocol)
 	}
 	if mode == "none" {

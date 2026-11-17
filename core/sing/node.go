@@ -360,11 +360,27 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options, users 
 			}
 		}
 		in.Options = &option.Hysteria2InboundOptions{
-			ListenOptions: listen,
-			UpMbps:        info.Hysteria2.UpMbps,
-			DownMbps:      info.Hysteria2.DownMbps,
-			Users:         buildHysteria2Users(users),
-			Obfs:          obfs,
+			ListenOptions:         listen,
+			UpMbps:                info.Hysteria2.UpMbps,
+			DownMbps:              info.Hysteria2.DownMbps,
+			IgnoreClientBandwidth: info.Hysteria2.Ignore_Client_Bandwidth,
+			Users:                 buildHysteria2Users(users),
+			Obfs:                  obfs,
+			InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
+				TLS: &tls,
+			},
+		}
+	case "tuic":
+		if !tls.Enabled {
+			return option.Inbound{}, fmt.Errorf("tuic requires TLS certificate configuration")
+		}
+		in.Type = "tuic"
+		tls.ALPN = append(tls.ALPN, "h3")
+		in.Options = &option.TUICInboundOptions{
+			ListenOptions:     listen,
+			Users:             buildTUICUsers(users),
+			CongestionControl: info.Tuic.CongestionControl,
+			ZeroRTTHandshake:  info.Tuic.ZeroRTTHandshake,
 			InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
 				TLS: &tls,
 			},
@@ -547,6 +563,18 @@ func buildHysteria2Users(users []panel.UserInfo) []option.Hysteria2User {
 	for i := range users {
 		result[i] = option.Hysteria2User{
 			Name:     users[i].Uuid,
+			Password: users[i].Uuid,
+		}
+	}
+	return result
+}
+
+func buildTUICUsers(users []panel.UserInfo) []option.TUICUser {
+	result := make([]option.TUICUser, len(users))
+	for i := range users {
+		result[i] = option.TUICUser{
+			Name:     users[i].Uuid,
+			UUID:     users[i].Uuid,
 			Password: users[i].Uuid,
 		}
 	}

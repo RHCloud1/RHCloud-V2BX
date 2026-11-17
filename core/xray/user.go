@@ -5,8 +5,10 @@ import (
 	"fmt"
 
 	"github.com/InazumaV/V2bX/api/panel"
+	"github.com/InazumaV/V2bX/common/counter"
 	"github.com/InazumaV/V2bX/common/format"
 	vCore "github.com/InazumaV/V2bX/core"
+	"github.com/InazumaV/V2bX/core/xray/app/dispatcher"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/proxy"
 )
@@ -27,47 +29,42 @@ func (c *Xray) GetUserManager(tag string) (proxy.UserManager, error) {
 	return userManager, nil
 }
 
-func (c *Xray) DelUsers(users []panel.UserInfo, tag string) error {
+func (c *Xray) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) error {
 	userManager, err := c.GetUserManager(tag)
 	if err != nil {
 		return fmt.Errorf("get user manager error: %s", err)
 	}
-	var up, down, user string
+	var user string
 	for i := range users {
 		user = format.UserTag(tag, users[i].Uuid)
 		err = userManager.RemoveUser(context.Background(), user)
 		if err != nil {
 			return err
 		}
-		up = "user>>>" + user + ">>>traffic>>>uplink"
-		down = "user>>>" + user + ">>>traffic>>>downlink"
-		c.shm.UnregisterCounter(up)
-		c.shm.UnregisterCounter(down)
+		if v, ok := c.dispatcher.Counter.Load(tag); ok {
+			tc := v.(*counter.TrafficCounter)
+			tc.Delete(user)
+		}
+		if v, ok := c.dispatcher.LinkManagers.Load(user); ok {
+			lm := v.(*dispatcher.LinkManager)
+			lm.CloseAll()
+			c.dispatcher.LinkManagers.Delete(user)
+		}
 	}
 	return nil
 }
 
 func (c *Xray) GetUserTraffic(tag, uuid string, reset bool) (up int64, down int64) {
-	upName := "user>>>" + format.UserTag(tag, uuid) + ">>>traffic>>>uplink"
-	downName := "user>>>" + format.UserTag(tag, uuid) + ">>>traffic>>>downlink"
-	upCounter := c.shm.GetCounter(upName)
-	downCounter := c.shm.GetCounter(downName)
-	if reset {
-		if upCounter != nil {
-			up = upCounter.Set(0)
-		}
-		if downCounter != nil {
-			down = downCounter.Set(0)
-		}
-	} else {
-		if upCounter != nil {
-			up = upCounter.Value()
-		}
-		if downCounter != nil {
-			down = downCounter.Value()
-		}
+	v, ok := c.dispatcher.Counter.Load(tag)
+	if !ok {
+		return 0, 0
 	}
-	return up, down
+	tc := v.(*counter.TrafficCounter)
+	user := format.UserTag(tag, uuid)
+	if reset {
+		return tc.Take(user)
+	}
+	return tc.GetUpCount(user), tc.GetDownCount(user)
 }
 
 func (c *Xray) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
