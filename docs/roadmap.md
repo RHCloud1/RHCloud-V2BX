@@ -61,7 +61,7 @@ amd64 ZIP 另在隔离目录完成真实二进制安装、check 与不联网 doc
 - [x] Naive 测试：入站参数、缺证书报错、真实监听的 UUID 鉴权与撤销、Xboard 实际 JSON 解析、向导生成。
 - [x] 只改限速或设备数时不重建入站，只更新限速器（`coreUserChanges`）。
 - [x] 限速器规则检查改为读锁，连接检查不再因正则匹配排队。
-- [x] 安装器：没有 `.sha256` 时从 `.dgst` 读取 SHA256；旧格式包给出明确提示；备份只保留最近 3 份（`V2BX_KEEP_BACKUPS`）。
+- [x] 安装器：没有 `.sha256` 时从 `.dgst` 读取 SHA256；旧格式包给出明确提示；备份默认只保留最近 1 份（每份约 160M，可用 `V2BX_KEEP_BACKUPS` 调整）。
 - [ ] Xboard 订阅输出 naive 节点（Xboard 补丁或插件），目前需要手动配置客户端。
 - [ ] VPS 上用 NaiveProxy 客户端实测 HTTP/2 / HTTP/3、流量上报和证书续期。
 - [x] 合入 wyx2685 到停更（71277de）为止的修复与功能（TUIC、ReportMinTraffic、ApiSendIP、msgpack、VLESS Encryption、xhttp、xray 断开删除用户等），见 `changes-20261117.md`。

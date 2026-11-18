@@ -36,10 +36,10 @@ fetch_checksum() {
     checksum_from_dgst "$out.dgst" "$out"
 }
 
-# Keep the newest backups (default 3) plus the one manual rollback points to.
+# Keep the newest backups (default 1, ~160M each) plus the one manual rollback points to.
 prune_backups() {
-    local keep=${V2BX_KEEP_BACKUPS:-3} last="" dir count=0
-    [[ "$keep" =~ ^[0-9]+$ && "$keep" -ge 1 ]] || keep=3
+    local keep=${V2BX_KEEP_BACKUPS:-1} last="" dir count=0
+    [[ "$keep" =~ ^[0-9]+$ && "$keep" -ge 1 ]] || keep=1
     if [[ -f "$(dirname "$INSTALL_DIR")/.v2bx-last-backup" ]]; then
         read -r last < "$(dirname "$INSTALL_DIR")/.v2bx-last-backup" || last=""
     fi

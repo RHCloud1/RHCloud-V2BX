@@ -324,7 +324,7 @@ func configure(input io.Reader, output io.Writer, path string) error {
 		cores = append(cores, cc)
 		node := map[string]any{"Core": coreType, "CoreName": coreName, "ApiHost": host, "ApiKey": key, "NodeID": id, "NodeType": protocol, "ListenIP": listen, "CertConfig": cert}
 		if protocol == "naive" {
-			quic, err := p.yes("Naive是否同时启用HTTP/3（额外占用同端口UDP）？(y/n)")
+			quic, err := p.yes("Naive是否同时启用HTTP/3（额外占用同端口UDP）？(y/n，回车默认否)")
 			if err != nil {
 				return err
 			}
