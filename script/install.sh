@@ -187,6 +187,16 @@ install_archive() (
     fi
     if [[ "$was_running" = true ]]; then
         echo -e "${green}V2bX 重启成功${plain}"
+    elif [[ -f "$CONFIG_DIR/config.json" ]]; then
+        # Like the original installer, start a configured node after installing. The
+        # old version was not running (stopped or crash-looping), so a failed start is
+        # reported instead of rolled back. A fresh install (e.g. after uninstall with the
+        # config put back) is also enabled at boot; an update keeps the user's choice.
+        [[ "$had_program" = true ]] || "$SYSTEMCTL" enable V2bX >/dev/null 2>&1 || true
+        "$SYSTEMCTL" start V2bX || true
+        sleep "${V2BX_HEALTH_DELAY:-2}"
+        if "$SYSTEMCTL" is-active --quiet V2bX; then echo -e "${green}V2bX 启动成功${plain}"
+        else echo -e "${red}V2bX 可能启动失败，请稍后使用 V2bX log 查看日志信息${plain}"; fi
     fi
 )
 

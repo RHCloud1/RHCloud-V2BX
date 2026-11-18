@@ -160,6 +160,7 @@ uninstall() {
     systemctl reset-failed
     rm /etc/V2bX/ -rf
     rm /usr/local/V2bX/ -rf
+    rm /usr/local/.v2bx-backups/ /usr/local/.v2bx-last-backup -rf
 
     echo ""
     echo -e "卸载成功，如果你想删除此脚本，则退出脚本后运行 ${green}rm /usr/bin/V2bX -f${plain} 进行删除"

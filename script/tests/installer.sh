@@ -62,6 +62,15 @@ cp "$INSTALL_DIR/V2bX" "$work/program.before"
 if install_archive "$work/legacy.zip" "$work/legacy.zip.sha256" 2>/dev/null; then exit 1; fi
 cmp "$work/program.before" "$INSTALL_DIR/V2bX"
 
+# Stopped or crash-looping node: the update starts it; a failed start is reported, not rolled back.
+rm -f "$ROOT/active"
+install_archive "$work/good.zip" "$work/good.zip.sha256" >/dev/null
+test -f "$ROOT/active"
+rm -f "$ROOT/active"
+install_archive "$work/fail.zip" "$work/fail.zip.sha256" >/dev/null
+grep -q FAIL_START "$INSTALL_DIR/V2bX"
+test ! -f "$ROOT/active"
+
 # Backups are pruned to the newest V2BX_KEEP_BACKUPS, never the rollback target.
 export V2BX_KEEP_BACKUPS=2
 for _ in 1 2 3 4; do sleep 1; install_archive "$work/good.zip" "$work/good.zip.sha256" >/dev/null; done
@@ -69,4 +78,9 @@ count=$(ls -1d "$BACKUP_ROOT"/release.* | wc -l)
 [[ "$count" -eq 2 ]] || { echo "expected 2 backups, found $count" >&2; exit 1; }
 read -r previous < "$(dirname "$INSTALL_DIR")/.v2bx-last-backup"
 test -d "$previous/program"
-echo 'Installer checksum/dgst fallback/legacy refusal/failure rollback/success/manual rollback/backup pruning tests passed'
+# Fresh install onto a kept config (e.g. after uninstall) starts and enables the node.
+rm -rf "$INSTALL_DIR" "$ROOT/active" "$ROOT/enabled"
+install_archive "$work/good.zip" "$work/good.zip.sha256" >/dev/null
+test -f "$ROOT/active"
+test -f "$ROOT/enabled"
+echo 'Installer checksum/dgst fallback/legacy refusal/failure rollback/start stopped node/fresh install enable/success/manual rollback/backup pruning tests passed'

@@ -7,6 +7,7 @@ case "$1" in
         if grep -q FAIL_START "$V2BX_ROOT/usr/local/V2bX/V2bX"; then exit 1; fi
         touch "$V2BX_ROOT/active"
         ;;
-    daemon-reload|enable) ;;
+    enable) touch "$V2BX_ROOT/enabled" ;;
+    daemon-reload) ;;
     *) exit 1 ;;
 esac
