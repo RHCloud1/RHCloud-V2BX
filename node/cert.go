@@ -61,23 +61,14 @@ func (c *Controller) requestCert() error {
 				return fmt.Errorf("existing certificate is invalid; use separate paths for different domains or replace this certificate: %w", err)
 			}
 			if !time.Now().Before(leaf.NotAfter) {
-				l, err := NewLego(c.CertConfig)
-				if err != nil {
-					return err
-				}
-				if err := l.RenewCert(); err != nil {
+				if err := c.acmeRequest((*Lego).RenewCert); err != nil {
 					return fmt.Errorf("renew expired certificate: %w", err)
 				}
 			}
 			return certcheck.Check(c.CertConfig.CertFile, c.CertConfig.KeyFile, c.CertConfig.CertDomain, time.Now())
 		}
-		l, err := NewLego(c.CertConfig)
-		if err != nil {
-			return fmt.Errorf("create lego object error: %s", err)
-		}
-		err = l.CreateCert()
-		if err != nil {
-			return fmt.Errorf("create lego cert error: %s", err)
+		if err := c.acmeRequest((*Lego).CreateCert); err != nil {
+			return fmt.Errorf("create lego cert error: %w", err)
 		}
 	case "self":
 		if c.CertConfig.CertFile == "" || c.CertConfig.KeyFile == "" {

@@ -69,7 +69,7 @@ func checkPath(p string) error {
 func (l *Lego) SetProvider() error {
 	switch l.config.CertMode {
 	case "http":
-		err := l.client.Challenge.SetHTTP01Provider(http01.NewProviderServer("", "80"))
+		err := l.client.Challenge.SetHTTP01Provider(http01.NewProviderServer("", httpChallengePort))
 		if err != nil {
 			return err
 		}
