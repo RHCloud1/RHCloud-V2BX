@@ -96,7 +96,7 @@ func (l *Lego) CreateCert() (err error) {
 	}
 	certificates, err := l.client.Certificate.Obtain(request)
 	if err != nil {
-		return fmt.Errorf("obtain certificate error: %s", err)
+		return fmt.Errorf("obtain certificate error: %s%s", err, l.challengeHint(err))
 	}
 	err = l.writeCert(certificates)
 	if err != nil {
@@ -122,13 +122,23 @@ func (l *Lego) RenewCert() error {
 		Certificate: file,
 	}, true, false, "")
 	if err != nil {
-		return err
+		return fmt.Errorf("%w%s", err, l.challengeHint(err))
 	}
 	err = l.writeCert(res)
 	if err != nil {
 		return fmt.Errorf("write certificate error: %s", err)
 	}
 	return nil
+}
+
+// challengeHint explains the common http-01 failure where another program
+// (nginx, caddy, a panel...) already listens on TCP 80.
+func (l *Lego) challengeHint(err error) string {
+	if l.config.CertMode != "http" || !strings.Contains(err.Error(), "address already in use") {
+		return ""
+	}
+	return fmt.Sprintf("\nhttp 模式申请证书需要临时占用 TCP 80 端口，但该端口已被其他程序占用（可用 ss -ltnp 'sport = :80' 查看）。"+
+		"请停止该程序后重启 V2bX，或改用 dns 模式，或把 %s 的证书放到 %s 和 %s", l.config.CertDomain, l.config.CertFile, l.config.KeyFile)
 }
 
 func (l *Lego) CheckCert(file []byte) (bool, error) {

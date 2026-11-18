@@ -1,7 +1,9 @@
 package node
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,5 +47,20 @@ func TestRequestCertRejectsWrongDomain(t *testing.T) {
 		if err := c.requestCert(); err == nil {
 			t.Fatalf("mode %s reused another domain's certificate", mode)
 		}
+	}
+}
+
+func TestChallengeHintForBusyPort80(t *testing.T) {
+	busy := errors.New("acme: error presenting token: could not start HTTP server for challenge: listen tcp :80: bind: address already in use")
+	l := &Lego{config: certConfig("hy.example.com", "/etc/V2bX/fullchain.cer", "/etc/V2bX/cert.key", "http")}
+	if hint := l.challengeHint(busy); !strings.Contains(hint, "80") || !strings.Contains(hint, "/etc/V2bX/fullchain.cer") {
+		t.Fatalf("missing port 80 hint: %q", hint)
+	}
+	if hint := l.challengeHint(errors.New("rate limited")); hint != "" {
+		t.Fatalf("unexpected hint: %q", hint)
+	}
+	l.config.CertMode = "dns"
+	if hint := l.challengeHint(busy); hint != "" {
+		t.Fatalf("dns mode should not mention port 80: %q", hint)
 	}
 }

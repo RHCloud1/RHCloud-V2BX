@@ -2,11 +2,18 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/InazumaV/V2bX/conf"
 )
@@ -197,5 +204,53 @@ func TestWriteConfigBundleRestoresEarlierWrites(t *testing.T) {
 		if err != nil || string(data) != "old" {
 			t.Fatalf("did not restore %s: %v", path, err)
 		}
+	}
+}
+
+func writeTestCert(t *testing.T, domain, certFile, keyFile string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), DNSNames: []string{domain},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConfigureReusesOriginalCertificatePath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	legacyCert, legacyKey := filepath.Join(dir, "fullchain.cer"), filepath.Join(dir, "cert.key")
+	writeTestCert(t, "hy.example", legacyCert, legacyKey)
+	// Two hysteria2 nodes with HTTP certificates: only the matching domain reuses the old files.
+	answers := []string{"y", "https://panel.example", "dummy-api-key", "y", "3", "8", "1", "hy.example", "", "3", "9", "1", "other.example", "n"}
+	var output bytes.Buffer
+	if err := configure(strings.NewReader(strings.Join(answers, "\n")+"\n"), &output, path); err != nil {
+		t.Fatalf("%v\n%s", err, output.String())
+	}
+	c := conf.New()
+	if err := c.LoadFromPath(path); err != nil {
+		t.Fatal(err)
+	}
+	reused, fresh := c.NodeConfig[0].Options.CertConfig, c.NodeConfig[1].Options.CertConfig
+	if reused.CertFile != legacyCert || reused.KeyFile != legacyKey || reused.CertMode != "http" {
+		t.Fatalf("matching certificate was not reused: %+v", reused)
+	}
+	if fresh.CertFile == legacyCert || !strings.Contains(fresh.CertFile, "other.example") {
+		t.Fatalf("certificate for another domain must not be reused: %+v", fresh)
 	}
 }

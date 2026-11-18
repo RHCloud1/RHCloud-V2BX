@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	certcheck "github.com/InazumaV/V2bX/common/cert"
 	"github.com/InazumaV/V2bX/common/file"
 	"github.com/InazumaV/V2bX/conf"
 	"github.com/spf13/cobra"
@@ -225,6 +226,13 @@ func configure(input io.Reader, output io.Writer, path string) error {
 			cert.CertFile = filepath.Join(dir, "certs", "{domain}", "fullchain.cer")
 			cert.KeyFile = filepath.Join(dir, "certs", "{domain}", "cert.key")
 			cert.Email = defaultACMEEmail
+			// The original wizard kept one certificate at <dir>/fullchain.cer; reuse it
+			// when it is still valid for this domain instead of requesting a new one.
+			legacyCert, legacyKey := filepath.Join(dir, "fullchain.cer"), filepath.Join(dir, "cert.key")
+			if certcheck.Check(legacyCert, legacyKey, cert.CertDomain, time.Now()) == nil {
+				cert.CertFile, cert.KeyFile = legacyCert, legacyKey
+				fmt.Fprintf(output, "检测到 %s 已有该域名的有效证书，直接使用。\n", legacyCert)
+			}
 			switch cert.CertMode {
 			case "dns":
 				if cert.Provider, err = p.ask("请输入DNS服务商(回车默认cloudflare)：", "cloudflare", false); err != nil {
@@ -241,8 +249,10 @@ func configure(input io.Reader, output io.Writer, path string) error {
 					fmt.Fprintln(output, "错误：DNS API参数格式不正确。")
 				}
 			case "self":
-				certDir := filepath.Join(dir, "certs", cert.CertDomain)
-				fmt.Fprintf(output, "已有证书请放到 %s/fullchain.cer 和 %s/cert.key，否则自动生成自签证书。\n", certDir, certDir)
+				if cert.CertFile != legacyCert {
+					certDir := filepath.Join(dir, "certs", cert.CertDomain)
+					fmt.Fprintf(output, "已有证书请放到 %s/fullchain.cer 和 %s/cert.key，否则自动生成自签证书。\n", certDir, certDir)
+				}
 			}
 		}
 		listen := map[string]string{"xray": "0.0.0.0", "sing": "0.0.0.0", "hysteria2": ""}[coreType]
