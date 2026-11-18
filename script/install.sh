@@ -10,6 +10,10 @@ MENU_FILE="${ROOT}/usr/bin/V2bX"
 BACKUP_ROOT="${ROOT}/usr/local/.v2bx-backups"
 SYSTEMCTL="${V2BX_SYSTEMCTL:-systemctl}"
 
+red='\033[0;31m'
+green='\033[0;32m'
+plain='\033[0m'
+
 download() {
     curl --fail --location --retry 3 --connect-timeout 15 --max-time 300 "$1" -o "$2"
 }
@@ -178,7 +182,12 @@ install_archive() (
     if [[ "$had_program" = true ]]; then printf '%s\n' "$backup" > "$parent/.v2bx-last-backup"; fi
     committed=true
     prune_backups || echo "清理旧备份失败，可手动删除 $BACKUP_ROOT 下较早的目录" >&2
-    echo "安装成功。配置和证书已保留。旧版本备份：$backup"
+    if [[ "$had_program" = true ]]; then
+        echo "原有配置和证书已保留，旧版本备份在 $backup"
+    fi
+    if [[ "$was_running" = true ]]; then
+        echo -e "${green}V2bX 重启成功${plain}"
+    fi
 )
 
 install_base() {
@@ -191,6 +200,28 @@ install_base() {
         yum install -y curl unzip ca-certificates
     else echo "需要 Debian/Ubuntu 或支持 dnf/yum 的 Linux" >&2; return 1
     fi
+}
+
+show_usage() {
+    echo ""
+    echo "V2bX 管理脚本使用方法 (兼容使用v2bx执行，大小写不敏感): "
+    echo "------------------------------------------"
+    echo "V2bX              - 显示管理菜单 (功能更多)"
+    echo "V2bX start        - 启动 V2bX"
+    echo "V2bX stop         - 停止 V2bX"
+    echo "V2bX restart      - 重启 V2bX"
+    echo "V2bX status       - 查看 V2bX 状态"
+    echo "V2bX enable       - 设置 V2bX 开机自启"
+    echo "V2bX disable      - 取消 V2bX 开机自启"
+    echo "V2bX log          - 查看 V2bX 日志"
+    echo "V2bX x25519       - 生成 x25519 密钥"
+    echo "V2bX generate     - 生成 V2bX 配置文件"
+    echo "V2bX update       - 更新 V2bX"
+    echo "V2bX update x.x.x - 更新 V2bX 指定版本"
+    echo "V2bX install      - 安装 V2bX"
+    echo "V2bX uninstall    - 卸载 V2bX"
+    echo "V2bX version      - 查看 V2bX 版本"
+    echo "------------------------------------------"
 }
 
 main() {
@@ -206,6 +237,7 @@ main() {
         trap - EXIT
         return
     fi
+    echo -e "${green}开始安装${plain}"
     install_base
     if [[ "${1:-}" = --archive ]]; then
         [[ $# -eq 2 ]] || { echo "用法: bash install.sh --archive /path/package.zip" >&2; return 1; }
@@ -217,6 +249,7 @@ main() {
             checksum_from_dgst "$archive.dgst" "$checksum"
         fi
         install_archive "$archive" "$checksum"
+        echo -e "${green}V2bX${plain} 安装完成"
     else
         local version="${1:-}" arch work url
         case "$(uname -m)" in
@@ -226,26 +259,42 @@ main() {
             *) echo "不支持的架构" >&2; return 1 ;;
         esac
         if [[ -z "$version" ]]; then
-            url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")
+            url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") || url=""
             version="${url##*/}"
+            [[ "$version" =~ ^[a-zA-Z0-9._+-]+$ && "$version" != latest ]] || {
+                echo -e "${red}检测 V2bX 版本失败，请稍后再试，或手动指定 V2bX 版本安装${plain}" >&2; return 1;
+            }
+            echo "检测到 V2bX 最新版本：${version}，开始安装"
+        else
+            [[ "$version" =~ ^[a-zA-Z0-9._+-]+$ ]] || { echo "无效版本号" >&2; return 1; }
+            echo "开始安装 V2bX $version"
         fi
-        [[ "$version" =~ ^[a-zA-Z0-9._+-]+$ ]] || { echo "无效版本号" >&2; return 1; }
         work=$(mktemp -d)
         trap 'rm -rf -- "$work"' EXIT
         url="https://github.com/$REPO/releases/download/$version/V2bX-linux-$arch.zip"
-        download "$url" "$work/package.zip"
+        download "$url" "$work/package.zip" || {
+            echo -e "${red}下载 V2bX $version 失败，请确保此版本存在且服务器能够下载 Github 的文件${plain}" >&2; return 1;
+        }
         fetch_checksum "$url" "$work/package.zip.sha256"
         install_archive "$work/package.zip" "$work/package.zip.sha256"
+        echo -e "${green}V2bX ${version}${plain} 安装完成"
         rm -rf -- "$work"
         trap - EXIT
     fi
+    show_usage
     if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
         local answer
-        read -rp "是否现在生成节点配置？(y/n): " answer || answer=n
+        read -rp "检测到你为第一次安装V2bX,是否自动直接生成配置文件？(y/n): " answer || answer=n
         if [[ "$answer" =~ ^[Yy]$ ]]; then
             "$INSTALL_DIR/V2bX" configure -c "$CONFIG_DIR/config.json"
-            [[ ! -f "$CONFIG_DIR/config.json" ]] || "$SYSTEMCTL" enable --now V2bX
-        else echo "安装完成，运行 V2bX generate 配置节点后再启动。"; fi
+            if [[ -f "$CONFIG_DIR/config.json" ]]; then
+                echo -e "${green}V2bX 配置文件生成完成,正在启动服务${plain}"
+                "$SYSTEMCTL" enable --now V2bX
+                sleep 2
+                if "$SYSTEMCTL" is-active --quiet V2bX; then echo -e "${green}V2bX 启动成功，已设置开机自启${plain}"
+                else echo -e "${red}V2bX 可能启动失败，请稍后使用 V2bX log 查看日志信息${plain}"; fi
+            fi
+        else echo "全新安装，请运行 V2bX generate 生成配置文件后再启动"; fi
     fi
 }
 

@@ -10,7 +10,7 @@
 
 ## V2bX 节点配置
 
-一键脚本：运行 `V2bX generate`，核心选 `2.sing-box`，协议选 `8.Naive`，证书选 HTTP 或 DNS 自动申请。
+一键脚本：运行 `V2bX generate`，核心选 `2. singbox`，协议选 `8. Naive`，证书选 HTTP 或 DNS 自动申请。
 
 手写配置示例见 `example/config_naive.json`，要点如下：
 

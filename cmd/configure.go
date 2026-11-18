@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -59,147 +60,223 @@ func newConfigureCommand() *cobra.Command {
 	return c
 }
 
+// defaultACMEEmail matches the address the original shell wizard wrote, so
+// existing lego account files (user-<email>.json) keep working.
+const defaultACMEEmail = "v2bx@github.com"
+
+func (p *configPrompt) yes(label string) (bool, error) {
+	answer, err := p.ask(label, "", false)
+	return strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes"), err
+}
+
+// choose prints a numbered menu in the original wizard's style and asks
+// again until one of the listed options is entered.
+func (p *configPrompt) choose(title string, options [][2]string) (string, error) {
+	for {
+		fmt.Fprintln(p.output, title)
+		for _, o := range options {
+			fmt.Fprintf(p.output, "%s. %s\n", o[0], o[1])
+		}
+		answer, err := p.ask("请输入：", "", false)
+		if err != nil {
+			return "", err
+		}
+		for _, o := range options {
+			if answer == o[0] {
+				return answer, nil
+			}
+		}
+		fmt.Fprintln(p.output, "无效的选择，请重新输入。")
+	}
+}
+
+func hasIPv6() bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.To4() == nil && n.IP.IsGlobalUnicast() {
+			return true
+		}
+	}
+	return false
+}
+
 func configure(input io.Reader, output io.Writer, path string) error {
 	p := &configPrompt{bufio.NewReader(input), input, output}
-	fmt.Fprintln(output, "V2bX 配置向导：生成同一 Xboard 面板的多个节点；现有文件会备份。")
-	answer, err := p.ask("继续？[y/N]：", "n", false)
+	fmt.Fprintln(output, "V2bX 配置文件生成向导")
+	fmt.Fprintln(output, "请阅读以下注意事项：")
+	fmt.Fprintf(output, "1. 生成的配置文件会保存到 %s\n", path)
+	fmt.Fprintln(output, "2. 原来的配置文件会备份为 config.json.bak.时间")
+	fmt.Fprintln(output, "3. 确定继续？(y/n)")
+	answer, err := p.ask("请输入：", "", false)
 	if err != nil {
 		return err
 	}
-	if !strings.EqualFold(answer, "y") {
+	if strings.HasPrefix(strings.ToLower(answer), "n") {
 		return nil
 	}
-	host, err := p.ask("Xboard 地址：https://...：", "", false)
+	var host, key string
+	askPanel := func(hostLabel string) error {
+		if host, err = p.ask(hostLabel, "", false); err != nil {
+			return err
+		}
+		key, err = p.ask("请输入面板对接API Key：", "", false)
+		return err
+	}
+	if err = askPanel("请输入机场网址："); err != nil {
+		return err
+	}
+	fixedPanel, err := p.yes("是否设置固定的机场网址和API Key？(y/n)")
 	if err != nil {
 		return err
 	}
-	key, err := p.ask("面板 API Key（不回显）：", "", true)
-	if err != nil {
-		return err
+	if fixedPanel {
+		fmt.Fprintln(output, "成功固定地址")
 	}
 	var nodes, cores []map[string]any
 	files := map[string][]byte{}
 	dir := filepath.Dir(path)
 	for i := 1; ; i++ {
-		core, err := p.ask("核心：1.Xray 2.sing-box 3.Hysteria2 [2]：", "2", false)
-		if err != nil {
-			return err
-		}
-		coreTypes := map[string]string{"1": "xray", "2": "sing", "3": "hysteria2"}
-		coreType, ok := coreTypes[core]
-		if !ok {
-			return fmt.Errorf("invalid core selection")
-		}
-		idText, err := p.ask("Xboard Node ID：", "", false)
-		if err != nil {
-			return err
-		}
-		id, err := strconv.Atoi(idText)
-		if err != nil || id <= 0 {
-			return fmt.Errorf("Node ID must be positive")
-		}
-		protocol := "hysteria2"
-		if coreType != "hysteria2" {
-			choice, err := p.ask("协议：1.Shadowsocks 2.VLESS 3.VMess 4.Hysteria 5.Hysteria2 6.Trojan 7.AnyTLS 8.Naive 9.TUIC：", "", false)
+		if i > 1 {
+			answer, err = p.ask("是否继续添加节点配置？(回车继续，输入n或no退出)", "", false)
 			if err != nil {
 				return err
 			}
-			protocols := map[string]string{"1": "shadowsocks", "2": "vless", "3": "vmess", "4": "hysteria", "5": "hysteria2", "6": "trojan", "7": "anytls", "8": "naive", "9": "tuic"}
-			protocol, ok = protocols[choice]
-			if !ok {
-				return fmt.Errorf("invalid protocol selection")
+			if strings.HasPrefix(strings.ToLower(answer), "n") {
+				break
 			}
-			if coreType == "xray" && (protocol == "anytls" || protocol == "naive" || protocol == "tuic" || strings.HasPrefix(protocol, "hysteria")) {
-				return fmt.Errorf("Xray does not support this protocol")
+			if !fixedPanel {
+				if err = askPanel("请输入机场网址(https://example.com)："); err != nil {
+					return err
+				}
 			}
 		}
-		listen, err := p.ask("监听 IP [0.0.0.0]，可填 :: 或本机具体 IPv6：", "0.0.0.0", false)
+		core, err := p.choose("请选择节点核心类型：", [][2]string{{"1", "xray"}, {"2", "singbox"}, {"3", "hysteria2"}})
 		if err != nil {
 			return err
 		}
-		if _, err = netip.ParseAddr(listen); err != nil {
-			return fmt.Errorf("invalid listen IP")
+		coreType := map[string]string{"1": "xray", "2": "sing", "3": "hysteria2"}[core]
+		var id int
+		for {
+			idText, err := p.ask("请输入节点Node ID：", "", false)
+			if err != nil {
+				return err
+			}
+			if id, err = strconv.Atoi(idText); err == nil && id > 0 {
+				break
+			}
+			fmt.Fprintln(output, "错误：请输入正确的数字作为Node ID。")
+		}
+		protocol := "hysteria2"
+		if coreType != "hysteria2" {
+			options := [][2]string{{"1", "Shadowsocks"}, {"2", "Vless"}, {"3", "Vmess"}}
+			if coreType == "sing" {
+				options = append(options, [2]string{"4", "Hysteria"}, [2]string{"5", "Hysteria2"})
+			}
+			options = append(options, [2]string{"6", "Trojan"})
+			if coreType == "sing" {
+				options = append(options, [2]string{"7", "AnyTLS"}, [2]string{"8", "Naive"}, [2]string{"9", "TUIC"})
+			}
+			choice, err := p.choose("请选择节点传输协议：", options)
+			if err != nil {
+				return err
+			}
+			protocol = map[string]string{"1": "shadowsocks", "2": "vless", "3": "vmess", "4": "hysteria", "5": "hysteria2", "6": "trojan", "7": "anytls", "8": "naive", "9": "tuic"}[choice]
 		}
 		cert := conf.NewCertConfig()
 		tlsRequired := protocol == "anytls" || protocol == "naive" || protocol == "tuic" || protocol == "trojan" || strings.HasPrefix(protocol, "hysteria")
 		if !tlsRequired {
-			answer, err = p.ask("是否使用 TLS 证书？[y/N]（Reality 选 n）：", "n", false)
-			if err != nil {
-				return err
+			reality := false
+			if protocol == "vless" {
+				if reality, err = p.yes("请选择是否为reality节点？(y/n)"); err != nil {
+					return err
+				}
 			}
-			tlsRequired = strings.EqualFold(answer, "y")
+			if !reality {
+				if tlsRequired, err = p.yes("请选择是否进行TLS配置？(y/n)"); err != nil {
+					return err
+				}
+			}
 		}
 		if tlsRequired {
-			choice, err := p.ask("证书模式：1.HTTP 2.DNS 3.自签 4.已有文件 [1]：", "1", false)
+			choice, err := p.choose("请选择证书申请模式：", [][2]string{
+				{"1", "http模式自动申请，节点域名已正确解析"},
+				{"2", "dns模式自动申请，需填入正确域名服务商API参数"},
+				{"3", "self模式，自签证书或提供已有证书文件"},
+			})
 			if err != nil {
 				return err
 			}
-			modes := map[string]string{"1": "http", "2": "dns", "3": "self", "4": "file"}
-			cert.CertMode, ok = modes[choice]
-			if !ok {
-				return fmt.Errorf("invalid certificate mode")
-			}
+			cert.CertMode = map[string]string{"1": "http", "2": "dns", "3": "self"}[choice]
 			if protocol == "naive" && cert.CertMode == "self" {
-				fmt.Fprintln(p.output, "注意：NaiveProxy 官方客户端不接受自签证书，自签只适合能关闭证书校验的客户端测试。")
+				fmt.Fprintln(output, "注意：NaiveProxy 官方客户端不接受自签证书，自签只适合能关闭证书校验的客户端测试。")
 			}
-			cert.CertDomain, err = p.ask("证书域名/SNI：", "", false)
-			if err != nil {
-				return err
-			}
-			if cert.CertDomain == "" || strings.ContainsAny(cert.CertDomain, "/\\") {
-				return fmt.Errorf("invalid certificate domain")
+			for {
+				if cert.CertDomain, err = p.ask("请输入节点证书域名(example.com)：", "", false); err != nil {
+					return err
+				}
+				if cert.CertDomain != "" && !strings.ContainsAny(cert.CertDomain, "/\\") {
+					break
+				}
+				fmt.Fprintln(output, "错误：请输入正确的域名。")
 			}
 			cert.CertFile = filepath.Join(dir, "certs", "{domain}", "fullchain.cer")
 			cert.KeyFile = filepath.Join(dir, "certs", "{domain}", "cert.key")
-			if cert.CertMode == "file" {
-				cert.CertFile, err = p.ask("证书链文件完整路径：", "", false)
-				if err != nil {
+			cert.Email = defaultACMEEmail
+			switch cert.CertMode {
+			case "dns":
+				if cert.Provider, err = p.ask("请输入DNS服务商(回车默认cloudflare)：", "cloudflare", false); err != nil {
 					return err
 				}
-				cert.KeyFile, err = p.ask("私钥文件完整路径：", "", false)
-				if err != nil {
-					return err
+				for {
+					env, err := p.ask(`请输入DNS API参数，JSON格式，如 {"CF_DNS_API_TOKEN":"xxx"}（不回显）：`, "", true)
+					if err != nil {
+						return err
+					}
+					if json.Unmarshal([]byte(env), &cert.DNSEnv) == nil && len(cert.DNSEnv) > 0 {
+						break
+					}
+					fmt.Fprintln(output, "错误：DNS API参数格式不正确。")
 				}
-			} else if cert.CertMode != "self" {
-				cert.Email, err = p.ask("ACME 邮箱：", "", false)
-				if err != nil {
-					return err
-				}
-				if !strings.Contains(cert.Email, "@") {
-					return fmt.Errorf("ACME email is required")
-				}
+			case "self":
+				certDir := filepath.Join(dir, "certs", cert.CertDomain)
+				fmt.Fprintf(output, "已有证书请放到 %s/fullchain.cer 和 %s/cert.key，否则自动生成自签证书。\n", certDir, certDir)
 			}
-			if cert.CertMode == "dns" {
-				cert.Provider, err = p.ask("DNS 提供商 [cloudflare]：", "cloudflare", false)
-				if err != nil {
+		}
+		listen := map[string]string{"xray": "0.0.0.0", "sing": "0.0.0.0", "hysteria2": ""}[coreType]
+		if coreType == "sing" && hasIPv6() {
+			listen = "::"
+		}
+		if coreType != "hysteria2" {
+			for {
+				if listen, err = p.ask(fmt.Sprintf("请输入监听IP(回车默认%s)：", listen), listen, false); err != nil {
 					return err
 				}
-				env, err := p.ask("DNS 环境变量 JSON（不回显）：", "", true)
-				if err != nil {
-					return err
+				if _, err = netip.ParseAddr(listen); err == nil {
+					break
 				}
-				if json.Unmarshal([]byte(env), &cert.DNSEnv) != nil || len(cert.DNSEnv) == 0 {
-					return fmt.Errorf("invalid DNS environment JSON")
-				}
+				fmt.Fprintln(output, "错误：请输入正确的IP，如 0.0.0.0 或 ::。")
+				listen = "0.0.0.0"
 			}
 		}
 		coreName := fmt.Sprintf("%s-node-%d", coreType, i)
 		cc := map[string]any{"Type": coreType, "Name": coreName, "Log": map[string]any{"Level": "error"}}
 		if coreType == "sing" {
-			answer, err = p.ask("此节点全部走住宅 SOCKS 出口？[y/N]：", "n", false)
+			residential, err := p.yes("是否让此节点全部走住宅SOCKS出口？(y/n，回车默认否)")
 			if err != nil {
 				return err
 			}
-			residential := strings.EqualFold(answer, "y")
 			outbound := map[string]any{"type": "direct", "tag": "direct"}
 			final := "direct"
 			suffix := "direct"
 			if residential {
-				server, err := p.ask("SOCKS 服务器：", "", false)
+				server, err := p.ask("请输入SOCKS服务器地址：", "", false)
 				if err != nil {
 					return err
 				}
-				portText, err := p.ask("SOCKS 端口 [10001]：", "10001", false)
+				portText, err := p.ask("请输入SOCKS端口(回车默认10001)：", "10001", false)
 				if err != nil {
 					return err
 				}
@@ -207,11 +284,11 @@ func configure(input io.Reader, output io.Writer, path string) error {
 				if err != nil || port < 1 || port > 65535 {
 					return fmt.Errorf("invalid SOCKS port")
 				}
-				username, err := p.ask("SOCKS 用户名：", "", false)
+				username, err := p.ask("请输入SOCKS用户名：", "", false)
 				if err != nil {
 					return err
 				}
-				password, err := p.ask("SOCKS 密码（不回显）：", "", true)
+				password, err := p.ask("请输入SOCKS密码（不回显）：", "", true)
 				if err != nil {
 					return err
 				}
@@ -237,20 +314,13 @@ func configure(input io.Reader, output io.Writer, path string) error {
 		cores = append(cores, cc)
 		node := map[string]any{"Core": coreType, "CoreName": coreName, "ApiHost": host, "ApiKey": key, "NodeID": id, "NodeType": protocol, "ListenIP": listen, "CertConfig": cert}
 		if protocol == "naive" {
-			answer, err = p.ask("Naive 同时启用 HTTP/3（额外占用同端口 UDP）？[y/N]：", "n", false)
+			quic, err := p.yes("Naive是否同时启用HTTP/3（额外占用同端口UDP）？(y/n)")
 			if err != nil {
 				return err
 			}
-			node["NaiveQUIC"] = strings.EqualFold(answer, "y")
+			node["NaiveQUIC"] = quic
 		}
 		nodes = append(nodes, node)
-		answer, err = p.ask("继续添加节点？[y/N]：", "n", false)
-		if err != nil {
-			return err
-		}
-		if !strings.EqualFold(answer, "y") {
-			break
-		}
 	}
 	data, err := json.MarshalIndent(map[string]any{"Log": map[string]any{"Level": "info"}, "Cores": cores, "Nodes": nodes}, "", "  ")
 	if err != nil {
@@ -270,7 +340,7 @@ func configure(input io.Reader, output io.Writer, path string) error {
 	if err := writeConfigBundle(files, path); err != nil {
 		return err
 	}
-	fmt.Fprintf(output, "已生成 %d 个节点：%s。已有文件已备份；可运行 V2bX check 和 V2bX restart。\n", len(nodes), path)
+	fmt.Fprintf(output, "V2bX 配置文件生成完成，共 %d 个节点：%s\n", len(nodes), path)
 	return nil
 }
 

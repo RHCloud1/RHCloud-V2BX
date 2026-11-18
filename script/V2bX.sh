@@ -364,9 +364,17 @@ show_V2bX_version() {
 
 generate_config_file() {
     local helper=/usr/local/V2bX/initconfig.sh
+    local before after
     [[ -f "$helper" ]] || { echo "缺少与当前版本配套的配置向导，请重新安装完整包"; return 1; }
-    source "$helper"
-    generate_config_file
+    before=$(cksum /etc/V2bX/config.json 2>/dev/null)
+    # Subshell: the helper defines a function with the same name as this one.
+    (source "$helper" && generate_config_file) || return 1
+    after=$(cksum /etc/V2bX/config.json 2>/dev/null)
+    if [[ -n "$after" && "$after" != "$before" ]]; then
+        echo -e "${green}V2bX 配置文件生成完成,正在重新启动服务${plain}"
+        systemctl enable V2bX >/dev/null 2>&1
+        restart 0
+    fi
 }
 
 # 放开防火墙端口

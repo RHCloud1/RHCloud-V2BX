@@ -14,12 +14,13 @@ import (
 func TestConfigureIsolatesNodesAndEscapesSecrets(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	password := `dummy-"password\with~symbols`
-	answers := []string{"y", "https://panel.example", "dummy-api-key", "3", "2", "::", "3", "hy.example", "y", "2", "7", "7", "0.0.0.0", "3", "any.example", "y", "socks.example", "10001", "dummy-user", password, "n"}
+	// hysteria2 core node 2 (self cert), then sing AnyTLS node 7 behind a SOCKS exit.
+	answers := []string{"y", "https://panel.example", "dummy-api-key", "y", "3", "2", "3", "hy.example", "", "2", "7", "7", "3", "any.example", "", "y", "socks.example", "10001", "dummy-user", password, "n"}
 	var output bytes.Buffer
 	if err := configure(strings.NewReader(strings.Join(answers, "\n")+"\n"), &output, path); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(output.String(), password) || strings.Contains(output.String(), "dummy-api-key") {
+	if strings.Contains(output.String(), password) {
 		t.Fatal("secret appeared in prompts")
 	}
 	c := conf.New()
@@ -38,8 +39,8 @@ func TestConfigureIsolatesNodesAndEscapesSecrets(t *testing.T) {
 	if c.NodeConfig[0].Options.CoreName == c.NodeConfig[1].Options.CoreName {
 		t.Fatal("nodes share a core unexpectedly")
 	}
-	if c.NodeConfig[0].Options.ListenIP != "::" {
-		t.Fatal("IPv6 listener lost")
+	if c.NodeConfig[0].Options.ListenIP != "" {
+		t.Fatal("hysteria2 core should keep its default listener")
 	}
 	if c.NodeConfig[0].Options.CertConfig.CertFile == c.NodeConfig[1].Options.CertConfig.CertFile {
 		t.Fatal("different domains share certificate path")
@@ -61,8 +62,8 @@ func TestConfigureIsolatesNodesAndEscapesSecrets(t *testing.T) {
 
 func TestConfigureNaiveNode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	// sing core, protocol 8, HTTP cert, direct exit, enable HTTP/3.
-	answers := []string{"y", "https://panel.example", "dummy-api-key", "2", "9", "8", "0.0.0.0", "1", "naive.example", "ops@example.com", "n", "y", "n"}
+	// sing core, protocol 8, HTTP cert, explicit IPv6 listener, direct exit, enable HTTP/3.
+	answers := []string{"", "https://panel.example", "dummy-api-key", "n", "2", "9", "8", "1", "naive.example", "::", "n", "y", "n"}
 	var output bytes.Buffer
 	if err := configure(strings.NewReader(strings.Join(answers, "\n")+"\n"), &output, path); err != nil {
 		t.Fatal(err)
@@ -81,10 +82,48 @@ func TestConfigureNaiveNode(t *testing.T) {
 	if n.Options.SingOptions == nil || !n.Options.SingOptions.NaiveQUIC {
 		t.Fatal("NaiveQUIC answer was not saved")
 	}
-	// Xray cannot serve naive.
-	answers = []string{"y", "https://panel.example", "dummy-api-key", "1", "9", "8"}
+	if n.Options.ListenIP != "::" {
+		t.Fatal("IPv6 listener lost")
+	}
+	if n.Options.CertConfig.Email != defaultACMEEmail {
+		t.Fatalf("ACME email should default to %s, got %q", defaultACMEEmail, n.Options.CertConfig.Email)
+	}
+	// Xray does not offer naive: the choice is asked again until input ends.
+	output.Reset()
+	answers = []string{"y", "https://panel.example", "dummy-api-key", "n", "1", "9", "8"}
 	if err := configure(strings.NewReader(strings.Join(answers, "\n")+"\n"), &output, filepath.Join(t.TempDir(), "x.json")); err == nil {
 		t.Fatal("expected xray naive to be rejected")
+	}
+	if strings.Contains(output.String(), "8. Naive") || !strings.Contains(output.String(), "无效的选择") {
+		t.Fatalf("xray menu should not list naive:\n%s", output.String())
+	}
+}
+
+func TestConfigureSecondPanelAndReality(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	// Not fixed: the second node asks for its own panel. xray VLESS Reality needs no certificate.
+	answers := []string{"y", "https://a.example", "key-a", "n", "1", "3", "2", "y", "",
+		"", "https://b.example", "key-b", "2", "4", "1", "n", "", "n", "no"}
+	var output bytes.Buffer
+	if err := configure(strings.NewReader(strings.Join(answers, "\n")+"\n"), &output, path); err != nil {
+		t.Fatalf("%v\n%s", err, output.String())
+	}
+	c := conf.New()
+	if err := c.LoadFromPath(path); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.NodeConfig) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(c.NodeConfig))
+	}
+	a, b := c.NodeConfig[0], c.NodeConfig[1]
+	if a.ApiConfig.APIHost != "https://a.example" || b.ApiConfig.APIHost != "https://b.example" || b.ApiConfig.Key != "key-b" {
+		t.Fatal("second node did not use its own panel")
+	}
+	if a.ApiConfig.NodeType != "vless" || a.Options.CertConfig.CertMode != "none" || a.Options.ListenIP != "0.0.0.0" {
+		t.Fatalf("unexpected reality node: %+v", a.Options)
+	}
+	if b.ApiConfig.NodeType != "shadowsocks" || b.ApiConfig.NodeID != 4 {
+		t.Fatalf("unexpected second node: %+v", b.ApiConfig)
 	}
 }
 
